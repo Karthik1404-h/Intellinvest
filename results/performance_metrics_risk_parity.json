@@ -1,0 +1,14 @@
+{
+  "total_return": 1.730409677426608,
+  "annualized_return": 0.20522709305718068,
+  "volatility": 0.1664251527185086,
+  "sharpe_ratio": 1.0851632950235064,
+  "sortino_ratio": 1.4069706580357475,
+  "max_drawdown": -0.24058325792872745,
+  "calmar_ratio": 0.8530397951381097,
+  "initial_capital": 1000000,
+  "final_capital": 2783597.695965711,
+  "total_transaction_costs": 0.0,
+  "average_turnover": 0.0,
+  "number_of_rebalances": 73
+}

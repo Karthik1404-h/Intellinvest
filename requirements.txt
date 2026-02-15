@@ -1,0 +1,46 @@
+# Core data science libraries
+numpy>=1.21.0
+pandas>=1.5.0
+scikit-learn>=1.2.0
+scipy>=1.9.0
+
+# Deep learning frameworks (optional - install separately if needed)
+# tensorflow>=2.10.0
+# torch>=1.12.0
+
+# Financial data and analysis
+yfinance>=0.2.18
+pypfopt>=1.5.0
+cvxpy>=1.2.0
+
+# Clustering algorithms
+hdbscan>=0.8.28
+
+# Visualization
+matplotlib>=3.6.0
+seaborn>=0.11.0
+plotly>=5.10.0
+
+# Technical analysis (optional - may need manual installation)
+# ta-lib>=0.4.25
+pandas-ta>=0.3.14b
+
+# Progress tracking and utilities
+tqdm>=4.64.0
+joblib>=1.2.0
+
+# Jupyter notebook support
+jupyter>=1.0.0
+ipykernel>=6.20.0
+
+# Statistical analysis
+statsmodels>=0.13.0
+
+# Configuration and logging
+pyyaml>=6.0
+python-dotenv>=1.0.0
+loguru>=0.7.0
+
+# Additional financial libraries
+requests>=2.28.0
+lxml>=4.9.0
