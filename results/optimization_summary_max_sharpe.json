@@ -1,7 +1,7 @@
 {
   "method": "max_sharpe",
   "expected_return": 0.0,
-  "volatility": 0.1499044191013854,
+  "volatility": 0.14990441445037417,
   "sharpe_ratio": 0.0,
   "optimization_status": "optimal"
 }

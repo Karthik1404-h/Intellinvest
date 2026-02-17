@@ -1,7 +1,7 @@
 {
   "method": "cluster_based",
   "expected_return": 0.0,
-  "volatility": 0.153416313429894,
+  "volatility": 0.15341632103036673,
   "sharpe_ratio": 0.0,
   "optimization_status": "optimal"
 }

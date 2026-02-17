@@ -1,7 +1,7 @@
 {
   "method": "risk_parity",
   "expected_return": 0,
-  "volatility": 0.19983176524599483,
+  "volatility": 0.19983175534774775,
   "sharpe_ratio": 0,
   "optimization_status": "success"
 }
