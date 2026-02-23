@@ -24,19 +24,22 @@ def load_strategy_results():
     
     for strategy in strategy_names:
         try:
-            # Load portfolio returns (these are already returns, not cumulative values!)
+            # Load portfolio values (these are dollar values, not returns!)
             values_path = os.path.join(Config.RESULTS_DIR, f'portfolio_values_{strategy}.csv')
             if os.path.exists(values_path):
                 portfolio_data = pd.read_csv(values_path, index_col=0, parse_dates=True)
                 
-                # The CSV actually contains returns, not cumulative values
+                # Extract portfolio values
                 if isinstance(portfolio_data, pd.DataFrame):
-                    returns = portfolio_data.iloc[:, 0]
+                    portfolio_values = portfolio_data.iloc[:, 0]
                 else:
-                    returns = portfolio_data
+                    portfolio_values = portfolio_data
                 
-                # Remove any NaN values
-                returns = returns.dropna()
+                # Calculate returns from portfolio values
+                returns = portfolio_values.pct_change().dropna()
+                
+                # Remove any remaining NaN or infinite values
+                returns = returns.replace([np.inf, -np.inf], np.nan).dropna()
                 
                 strategies[f'ML_{strategy}'] = returns
                 logger.info(f"Loaded {strategy}: {len(returns)} return observations")
@@ -221,17 +224,17 @@ def analyze_and_visualize(comparison_df):
     benchmark_strategies = comparison_df[~comparison_df['Strategy'].str.startswith('ML_')]
     
     print("\n" + "="*100)
-    print("📊 COMPREHENSIVE PERFORMANCE COMPARISON: ML STRATEGIES vs BENCHMARKS")
+    print("COMPREHENSIVE PERFORMANCE COMPARISON: ML STRATEGIES vs BENCHMARKS")
     print("="*100)
     
-    print("\n🤖 ML-OPTIMIZED STRATEGIES:")
+    print("\nML-OPTIMIZED STRATEGIES:")
     print(ml_strategies.to_string(index=False))
     
-    print("\n📈 SIMPLE BENCHMARK STRATEGIES:")
+    print("\nSIMPLE BENCHMARK STRATEGIES:")
     print(benchmark_strategies.to_string(index=False))
     
     print("\n" + "="*100)
-    print("🏆 OVERALL RANKINGS")
+    print("OVERALL RANKINGS")
     print("="*100)
     
     # Rankings

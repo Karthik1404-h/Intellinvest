@@ -99,7 +99,7 @@ class Config:
     ]
     
     # Risk constraints
-    MAX_WEIGHT_PER_STOCK = 0.1  # Maximum 10% allocation per stock
+    MAX_WEIGHT_PER_STOCK = 0.25  # Maximum 25% allocation per stock
     MAX_WEIGHT_PER_SECTOR = 0.3  # Maximum 30% allocation per sector
     MIN_WEIGHT = 0.0  # Minimum weight (allows short selling if negative)
     

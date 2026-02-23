@@ -21,6 +21,9 @@ matplotlib>=3.6.0
 seaborn>=0.11.0
 plotly>=5.10.0
 
+# Interactive Dashboard
+streamlit>=1.28.0
+
 # Technical analysis (optional - may need manual installation)
 # ta-lib>=0.4.25
 pandas-ta>=0.3.14b

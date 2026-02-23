@@ -87,19 +87,33 @@ class ReturnForecaster:
             # Use specific model or method
             return self._model_forecast(recent_data, horizon, method)
     
-    def _naive_forecast(self, data: pd.DataFrame, horizon: int) -> pd.Series:
+    def _naive_forecast(self, data: pd.DataFrame, horizon: int) ->pd.Series:
         """Naive forecast using historical mean returns"""
         symbols = data.columns.get_level_values(0).unique()
         forecasts = {}
         
         for symbol in symbols:
-            if (symbol, 'returns_1d') in data.columns:
-                returns = data[symbol]['returns_1d'].dropna()
-                # Use rolling average of recent returns
-                forecast = returns.tail(20).mean() * horizon  # Adjust for horizon
-                forecasts[symbol] = forecast
+            try:
+                # Try returns_1d first, then calculate from Close
+                if (symbol, 'returns_1d') in data.columns:
+                    returns = data[symbol]['returns_1d'].dropna()
+                elif (symbol, 'Close') in data.columns:
+                    prices = data[symbol]['Close'].dropna()
+                    returns = prices.pct_change().dropna()
+                else:
+                    continue
+                
+                if len(returns) >= 20:
+                    # Use rolling average of recent returns
+                    forecast = returns.tail(60).mean() * horizon  # Adjust for horizon
+                    forecasts[symbol] = forecast
+            except Exception as e:
+                logger.warning(f"Error forecasting {symbol}: {e}")
+                continue
         
-        return pd.Series(forecasts)
+        forecast_series = pd.Series(forecasts)
+        logger.info(f"Naive forecast range: [{forecast_series.min():.6f}, {forecast_series.max():.6f}]")
+        return forecast_series
     
     def _ensemble_forecast(self, data: pd.DataFrame, horizon: int) -> pd.Series:
         """Ensemble forecast combining multiple models"""
@@ -317,11 +331,13 @@ class PortfolioOptimizer:
         
         # Bounds
         max_weight = constraints.get('max_weight', self.config.MAX_WEIGHT_PER_STOCK) if constraints else self.config.MAX_WEIGHT_PER_STOCK
-        min_weight = constraints.get('min_weight', 0.01) if constraints else 0.01
+        min_weight = constraints.get('min_weight', self.config.MIN_WEIGHT) if constraints else self.config.MIN_WEIGHT
         bounds = [(min_weight, max_weight) for _ in range(n_assets)]
         
-        # Initial guess: equal weights
-        x0 = np.ones(n_assets) / n_assets
+        # Initial guess: inverse volatility (better starting point for risk parity)
+        vols = np.sqrt(np.diag(cov_matrix.values))
+        inv_vol = 1 / vols
+        x0 = inv_vol / np.sum(inv_vol)
         
         # Optimize
         result = minimize(
@@ -329,7 +345,8 @@ class PortfolioOptimizer:
             x0,
             method='SLSQP',
             bounds=bounds,
-            constraints=constraints_list
+            constraints=constraints_list,
+            options={'ftol': 1e-9, 'maxiter': 1000}
         )
         
         optimal_weights = pd.Series(index=cov_matrix.index, data=result.x)
@@ -378,80 +395,104 @@ class PortfolioOptimizer:
     def _min_variance_optimization(self, 
                                  cov_matrix: pd.DataFrame,
                                  constraints: Optional[Dict] = None) -> Dict[str, Any]:
-        """Minimum variance optimization"""
-        if not PYPFOPT_AVAILABLE:
-            return self._mean_variance_optimization(
-                pd.Series(index=cov_matrix.index, data=0), 
-                cov_matrix, 
-                constraints
-            )
+        """Minimum variance optimization using scipy"""
+        n_assets = len(cov_matrix)
         
-        try:
-            ef = EfficientFrontier(
-                pd.Series(index=cov_matrix.index, data=0),  # Zero expected returns
-                cov_matrix
-            )
-            
-            # Apply constraints
-            max_weight = constraints.get('max_weight', self.config.MAX_WEIGHT_PER_STOCK) if constraints else self.config.MAX_WEIGHT_PER_STOCK
-            ef.add_constraint(lambda w: w <= max_weight)
-            ef.add_constraint(lambda w: w >= 0)
-            
-            weights = ef.min_volatility()
-            
-            optimal_weights = pd.Series(weights)
-            portfolio_vol = np.sqrt(optimal_weights @ cov_matrix @ optimal_weights) * np.sqrt(252)
-            
-            return {
-                'weights': optimal_weights,
-                'volatility': portfolio_vol,
-                'optimization_status': 'success'
-            }
-            
-        except Exception as e:
-            logger.error(f"Min variance optimization failed: {e}")
-            return self._mean_variance_optimization(
-                pd.Series(index=cov_matrix.index, data=0), 
-                cov_matrix, 
-                constraints
-            )
+        # Objective: minimize portfolio variance
+        def portfolio_variance(weights):
+            return weights @ cov_matrix.values @ weights
+        
+        # Constraints
+        max_weight = constraints.get('max_weight', self.config.MAX_WEIGHT_PER_STOCK) if constraints else self.config.MAX_WEIGHT_PER_STOCK
+        min_weight = constraints.get('min_weight', self.config.MIN_WEIGHT) if constraints else self.config.MIN_WEIGHT
+        
+        cons = (
+            {'type': 'eq', 'fun': lambda w: np.sum(w) - 1},  # Weights sum to 1
+        )
+        
+        bounds = tuple((min_weight, max_weight) for _ in range(n_assets))
+        
+        # Initial guess: equal weights
+        x0 = np.array([1.0 / n_assets] * n_assets)
+        
+        # Optimize
+        result = minimize(
+            portfolio_variance,
+            x0,
+            method='SLSQP',
+            bounds=bounds,
+            constraints=cons,
+            options={'maxiter': 1000, 'ftol': 1e-9}
+        )
+        
+        if not result.success:
+            logger.warning(f"Min variance optimization warning: {result.message}")
+        
+        optimal_weights = pd.Series(index=cov_matrix.index, data=result.x)
+        portfolio_vol = np.sqrt(result.fun) * np.sqrt(252)
+        
+        return {
+            'weights': optimal_weights,
+            'volatility': portfolio_vol,
+            'optimization_status': 'success' if result.success else 'warning'
+        }
     
     def _max_sharpe_optimization(self, 
                                expected_returns: pd.Series,
                                cov_matrix: pd.DataFrame,
                                constraints: Optional[Dict] = None) -> Dict[str, Any]:
-        """Maximum Sharpe ratio optimization"""
-        if not PYPFOPT_AVAILABLE:
-            return self._mean_variance_optimization(expected_returns, cov_matrix, constraints)
+        """Maximum Sharpe ratio optimization using scipy"""
+        n_assets = len(expected_returns)
         
-        try:
-            ef = EfficientFrontier(expected_returns, cov_matrix)
-            
-            # Apply constraints
-            max_weight = constraints.get('max_weight', self.config.MAX_WEIGHT_PER_STOCK) if constraints else self.config.MAX_WEIGHT_PER_STOCK
-            ef.add_constraint(lambda w: w <= max_weight)
-            ef.add_constraint(lambda w: w >= 0)
-            
-            weights = ef.max_sharpe()
-            
-            optimal_weights = pd.Series(weights)
-            
-            # Calculate metrics
-            portfolio_return = (optimal_weights @ expected_returns) * 252
-            portfolio_vol = np.sqrt(optimal_weights @ cov_matrix @ optimal_weights) * np.sqrt(252)
-            sharpe_ratio = portfolio_return / portfolio_vol if portfolio_vol > 0 else 0
-            
-            return {
-                'weights': optimal_weights,
-                'expected_return': portfolio_return,
-                'volatility': portfolio_vol,
-                'sharpe_ratio': sharpe_ratio,
-                'optimization_status': 'success'
-            }
-            
-        except Exception as e:
-            logger.error(f"Max Sharpe optimization failed: {e}")
-            return self._mean_variance_optimization(expected_returns, cov_matrix, constraints)
+        # Objective: maximize Sharpe ratio (minimize negative Sharpe)
+        def negative_sharpe(weights):
+            portfolio_return = np.sum(expected_returns.values * weights) * 252
+            portfolio_vol = np.sqrt(weights @ cov_matrix.values @ weights) * np.sqrt(252)
+            return -portfolio_return / portfolio_vol if portfolio_vol > 0 else 1e10
+        
+        # Constraints
+        max_weight = constraints.get('max_weight', self.config.MAX_WEIGHT_PER_STOCK) if constraints else self.config.MAX_WEIGHT_PER_STOCK
+        min_weight = constraints.get('min_weight', self.config.MIN_WEIGHT) if constraints else self.config.MIN_WEIGHT
+        
+        cons = (
+            {'type': 'eq', 'fun': lambda w: np.sum(w) - 1},  # Weights sum to 1
+        )
+        
+        bounds = tuple((min_weight, max_weight) for _ in range(n_assets))
+        
+        # Initial guess: weights proportional to expected returns
+        x0 = np.abs(expected_returns.values) + 1e-8
+        x0 = x0 / np.sum(x0)
+        x0 = np.clip(x0, min_weight, max_weight)
+        x0 = x0 / np.sum(x0)  # Renormalize
+        
+        # Optimize
+        result = minimize(
+            negative_sharpe,
+            x0,
+            method='SLSQP',
+            bounds=bounds,
+            constraints=cons,
+            options={'maxiter': 1000, 'ftol': 1e-9}
+        )
+        
+        if not result.success:
+            logger.warning(f"Max Sharpe optimization warning: {result.message}")
+        
+        optimal_weights = pd.Series(index=expected_returns.index, data=result.x)
+        
+        # Calculate metrics
+        portfolio_return = (optimal_weights @ expected_returns) * 252
+        portfolio_vol = np.sqrt(optimal_weights @ cov_matrix @ optimal_weights) * np.sqrt(252)
+        sharpe_ratio = portfolio_return / portfolio_vol if portfolio_vol > 0 else 0
+        
+        return {
+            'weights': optimal_weights,
+            'expected_return': portfolio_return,
+            'volatility': portfolio_vol,
+            'sharpe_ratio': sharpe_ratio,
+            'optimization_status': 'success' if result.success else 'warning'
+        }
     
     def _cluster_based_optimization(self,
                                   expected_returns: pd.Series,
