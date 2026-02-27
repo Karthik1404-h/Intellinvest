@@ -8,46 +8,55 @@ This comprehensive portfolio optimization project implements machine learning an
 
 ```
 portfolio_optimizer/
-├── 📄 README.md                    # Project documentation
-├── 📄 main.py                      # Main entry point
-├── 📄 requirements.txt             # Python dependencies
+├── 📄 README.md                        # Project documentation
+├── 📄 main.py                          # Main pipeline entry point (CLI)
+├── 📄 dashboard.py                     # Streamlit interactive dashboard
+├── 📄 collect_market_data.py           # Download US / India market data
+├── 📄 regenerate_strategies_market.py  # Run all 5 strategies for a market
+├── 📄 run_benchmarks_market.py         # Build benchmark_comparison_detailed.csv
+├── 📄 run_clustering_market.py         # Build cluster assignment CSV files
+├── 📄 setup.py                         # Dependency installer helper
+├── 📄 requirements.txt                 # Python dependencies
 ├── 
-├── 📁 config/                      # Configuration management
+├── 📁 config/                          # Configuration management
 │   ├── __init__.py
-│   └── config.py                   # Main configuration file
+│   └── config.py                       # Symbols, paths, optimization params
 ├── 
-├── 📁 src/                         # Source code modules
+├── 📁 src/                             # Source code modules
 │   ├── __init__.py
-│   ├── 📁 data/                    # Data collection & preprocessing
-│   │   ├── __init__.py
-│   │   └── data_collection.py      # Data handling utilities
-│   ├── 📁 clustering/              # Stock clustering algorithms
-│   │   ├── __init__.py
-│   │   └── stock_clustering.py     # Clustering implementation
-│   ├── 📁 models/                  # ML/DL prediction models
-│   │   ├── __init__.py
-│   │   └── prediction_models.py    # Return prediction models
-│   ├── 📁 optimization/            # Portfolio optimization
-│   │   ├── __init__.py
-│   │   └── portfolio_optimizer.py  # Optimization algorithms
-│   └── 📁 evaluation/              # Backtesting & evaluation
-│       ├── __init__.py
-│       └── backtesting.py          # Performance evaluation
+│   ├── 📁 data/
+│   │   └── data_collection.py          # Data download & preprocessing
+│   ├── 📁 clustering/
+│   │   └── stock_clustering.py         # K-Means, Hierarchical, GMM
+│   ├── 📁 models/
+│   │   └── prediction_models.py        # ML return forecasting models
+│   ├── 📁 optimization/
+│   │   └── portfolio_optimizer.py      # Optimization algorithms (5 strategies)
+│   └── 📁 evaluation/
+│       └── backtesting.py              # Backtesting engine & performance metrics
 ├── 
-├── 📁 data/                        # Data storage
-│   ├── raw/                        # Raw market data
-│   ├── processed/                  # Cleaned & processed data
-│   └── features/                   # Engineered features
+├── 📁 data/                            # gitignored — run collect_market_data.py
+│   ├── raw/
+│   │   ├── us/                         # SPY_benchmark.csv, stock_prices.csv
+│   │   └── india/                      # NSEI_benchmark.csv, stock_prices.csv
+│   └── processed/
+│       ├── us/                         # processed_stock_data.csv, returns_data.csv
+│       └── india/
 ├── 
-├── 📁 notebooks/                   # Interactive analysis
-│   ├── 01_data_exploration.ipynb   # Data exploration
-│   └── 02_advanced_analysis.ipynb  # Advanced analysis
+├── 📁 notebooks/                       # Interactive analysis
+│   ├── 01_data_exploration.ipynb
+│   └── 02_advanced_analysis.ipynb
 ├── 
-└── 📁 results/                     # Model outputs & results
-    ├── Models (.pkl, .h5 files)
-    ├── Portfolio weights (.csv files)
-    ├── Performance metrics (.json files)
-    └── Visualizations (.png files)
+└── 📁 results/                         # Strategy outputs (committed to git)
+    ├── us/
+    │   ├── portfolio_values_*.csv       # Cumulative portfolio value history
+    │   ├── portfolio_weights_*.csv      # Rebalancing weight history
+    │   ├── performance_metrics_*.json   # Sharpe, return, drawdown etc.
+    │   ├── cluster_assignments_*.csv    # Stock cluster membership
+    │   ├── cluster_analysis_*.csv       # Cluster statistics
+    │   ├── benchmark_comparison_detailed.csv
+    │   └── strategy_comparison_summary.csv
+    └── india/                           # Same structure for Nifty 50
 ```
 
 ## 🚀 Getting Started

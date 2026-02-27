@@ -26,6 +26,7 @@ venv/
 ENV/
 env/
 .venv
+.conda/
 
 # Jupyter Notebook
 .ipynb_checkpoints
@@ -42,12 +43,16 @@ env/
 .DS_Store
 Thumbs.db
 
-# Data files (large datasets)
-data/raw/*.csv
-data/raw/*.parquet
-data/raw/*.h5
+# Data files (large raw market downloads — regenerate with collect_market_data.py)
+data/raw/**
+data/processed/**
+data/features/**
+# but keep directory placeholders
+!data/raw/**/.gitkeep
+!data/processed/**/.gitkeep
+!data/features/.gitkeep
 
-# Model files (can be large)
+# Model files (large, regenerate with regenerate_strategies_market.py)
 *.pkl
 *.h5
 *.pt
@@ -59,9 +64,9 @@ data/raw/*.h5
 logs/
 *.log.*
 
-# Results (optional - comment out if you want to commit results)
-# results/*.png
-# results/*.csv
+# Results: CSV/JSON strategy outputs ARE committed (dashboard needs them)
+# PNG charts are excluded (regenerated automatically)
+results/**/*.png
 
 # Environment
 .env

@@ -12,8 +12,12 @@ class Config:
     DATA_START_DATE = "2018-01-01"
     DATA_END_DATE = datetime.now().strftime("%Y-%m-%d")
     
-    # Stock universe (you can modify this list)
-    STOCK_SYMBOLS = [
+    # Market selection
+    AVAILABLE_MARKETS = ['US', 'INDIA']
+    DEFAULT_MARKET = 'US'
+    
+    # US Stock universe
+    US_STOCK_SYMBOLS = [
         # Technology
         'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META', 'TSLA', 'NVDA', 'NFLX',
         # Finance
@@ -28,7 +32,31 @@ class Config:
         'BA', 'CAT', 'GE', 'MMM'
     ]
     
-    # Market benchmark
+    # Indian Stock universe (Nifty 50)
+    INDIA_STOCK_SYMBOLS = [
+        # Add .NS suffix for NSE (National Stock Exchange of India)
+        'RELIANCE.NS', 'TCS.NS', 'HDFCBANK.NS', 'INFY.NS', 'ICICIBANK.NS',
+        'HINDUNILVR.NS', 'ITC.NS', 'SBIN.NS', 'BHARTIARTL.NS', 'KOTAKBANK.NS',
+        'LT.NS', 'AXISBANK.NS', 'ASIANPAINT.NS', 'MARUTI.NS', 'TITAN.NS',
+        'SUNPHARMA.NS', 'ULTRACEMCO.NS', 'NESTLEIND.NS', 'BAJFINANCE.NS', 'WIPRO.NS',
+        'HCLTECH.NS', 'ADANIENT.NS', 'ONGC.NS', 'NTPC.NS', 'POWERGRID.NS',
+        'TATAMOTORS.NS', 'TATASTEEL.NS', 'BAJAJFINSV.NS', 'M&M.NS', 'TECHM.NS',
+        'COALINDIA.NS', 'HINDALCO.NS', 'INDUSINDBK.NS', 'DRREDDY.NS', 'CIPLA.NS',
+        'EICHERMOT.NS', 'DIVISLAB.NS', 'TATACONSUM.NS', 'GRASIM.NS', 'JSWSTEEL.NS',
+        'APOLLOHOSP.NS', 'HEROMOTOCO.NS', 'BRITANNIA.NS', 'SBILIFE.NS', 'ADANIPORTS.NS',
+        'BPCL.NS', 'HDFCLIFE.NS', 'SHRIRAMFIN.NS', 'LTIM.NS', 'BAJAJ-AUTO.NS'
+    ]
+    
+    # Legacy compatibility - defaults to US
+    STOCK_SYMBOLS = US_STOCK_SYMBOLS
+    
+    # Market-specific benchmarks
+    MARKET_BENCHMARKS = {
+        'US': 'SPY',      # S&P 500
+        'INDIA': '^NSEI'  # Nifty 50 Index
+    }
+    
+    # Market benchmark (legacy)
     BENCHMARK_SYMBOL = "SPY"
     
     # Clustering settings
@@ -118,6 +146,45 @@ class Config:
     # Logging settings
     LOG_LEVEL = 'INFO'
     LOG_FORMAT = "{time:YYYY-MM-DD HH:mm:ss} | {level} | {module} | {message}"
+    
+    @staticmethod
+    def get_stock_symbols(market: str = 'US') -> List[str]:
+        """Get stock symbols for a specific market"""
+        market = market.upper()
+        if market == 'US':
+            return Config.US_STOCK_SYMBOLS
+        elif market == 'INDIA':
+            return Config.INDIA_STOCK_SYMBOLS
+        else:
+            raise ValueError(f"Unknown market: {market}. Available markets: {Config.AVAILABLE_MARKETS}")
+    
+    @staticmethod
+    def get_benchmark_symbol(market: str = 'US') -> str:
+        """Get benchmark symbol for a specific market"""
+        market = market.upper()
+        return Config.MARKET_BENCHMARKS.get(market, Config.BENCHMARK_SYMBOL)
+    
+    @staticmethod
+    def get_market_data_dir(market: str, data_type: str = 'raw') -> str:
+        """Get market-specific data directory"""
+        market = market.upper()
+        base_dir = {
+            'raw': Config.RAW_DATA_DIR,
+            'processed': Config.PROCESSED_DATA_DIR,
+            'features': Config.FEATURES_DIR
+        }.get(data_type, Config.RAW_DATA_DIR)
+        
+        market_dir = os.path.join(base_dir, market.lower())
+        os.makedirs(market_dir, exist_ok=True)
+        return market_dir
+    
+    @staticmethod
+    def get_market_results_dir(market: str) -> str:
+        """Get market-specific results directory"""
+        market = market.upper()
+        results_dir = os.path.join(Config.RESULTS_DIR, market.lower())
+        os.makedirs(results_dir, exist_ok=True)
+        return results_dir
 
 class ModelConfig:
     """Configuration for specific model parameters"""

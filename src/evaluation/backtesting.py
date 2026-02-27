@@ -232,6 +232,18 @@ class PortfolioBacktester:
                 continue
         
         # Convert results to DataFrames
+        if not portfolio_values:
+            logger.error("No portfolio values recorded - all rebalancing dates failed")
+            return {
+                'portfolio_values': pd.Series(dtype=float),
+                'portfolio_returns': pd.Series(dtype=float),
+                'weights_history': pd.DataFrame(),
+                'turnover_history': pd.DataFrame(),
+                'transaction_costs_history': pd.DataFrame(),
+                'performance_metrics': {},
+                'optimization_method': optimization_method,
+                'rebalancing_frequency': rebalancing_freq
+            }
         portfolio_df = pd.DataFrame(portfolio_values).set_index('date')['value']
         portfolio_returns = portfolio_df.pct_change().dropna()
         

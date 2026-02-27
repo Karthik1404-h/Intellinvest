@@ -17,74 +17,74 @@ The dashboard will automatically open in your default web browser at `http://loc
 ## Features
 
 ### 🏠 Overview
-- Key performance metrics at a glance
-- Cumulative performance charts
-- Quick strategy comparison
-- Performance rankings
+- Cumulative portfolio value chart with optional market-index overlay
+- Key performance metrics at a glance (Sharpe, return, drawdown)
+- Strategy ranking table
+- Quick comparison across all 5 strategies
 
 ### 📈 Performance Analysis
 - Detailed strategy metrics
 - Cumulative returns visualization
-- Drawdown analysis
-- Returns distribution
-- Rolling performance metrics
+- Drawdown curves
+- Returns distribution histogram
+- Rolling Sharpe ratio and rolling volatility
 
 ### 💼 Portfolio Composition
-- Top 10 holdings visualization
-- Portfolio allocation pie charts
-- Complete holdings table
-- Concentration metrics
+- Top 10 holdings bar chart
+- Portfolio allocation pie chart
+- Complete holdings table with weights
+- Rebalancing history heatmap
 
-### 🎯 Clustering Analysis
-- Stock clustering results
-- Cluster characteristics
-- Risk-return profile by cluster
-- Stocks grouped by similarity
+### 🔬 Clustering Analysis
+- PCA scatter of stock clusters (K-Means / Hierarchical / Gaussian Mixture)
+- Cluster characteristics: mean return, volatility, Sharpe, drawdown
+- Stocks-per-cluster listing
 
-### ⚖️ Risk Analysis
-- Volatility comparison
-- Maximum drawdown analysis
-- Risk-adjusted returns (Sharpe, Sortino, Calmar ratios)
-- Detailed risk metrics table
+### ⚠️ Risk Analysis
+- VaR (95%) and CVaR estimates
+- Correlation matrix heatmap
+- Volatility and drawdown comparison across strategies
+- Risk-adjusted metrics table (Sharpe, Sortino, Calmar)
 
 ### 🏆 Benchmark Comparison
-- ML strategies vs simple benchmarks
-- Risk-return scatter plot
-- Performance gap analysis
-- Complete comparison metrics
+- **Verdict banner**: "✅ YES — ML Delivers Real Alpha" / "⚠️ PARTIALLY" / "❌ NO"  
+- Value-add scorecard (Sharpe & return delta vs market index, equal-weight, cap-weighted)
+- Cumulative wealth bar chart ($1 invested → $X for each strategy + benchmark)
+- Side-by-side Annual Return and Sharpe Ratio bar charts (blue = ML, orange = Benchmark)
+- Risk-return scatter (ML vs benchmarks colour-coded)
+- Expandable full alpha table (ML vs every individual benchmark)
+- Complete performance table with gradient styling
 
 ## Dashboard Controls
 
-- **Sidebar Navigation**: Switch between different analysis pages
-- **Strategy Selector**: Choose specific strategies to analyze in detail
-- **Interactive Charts**: Hover for details, zoom, pan, download
-- **Data Tables**: Sort and filter performance metrics
+- **Market Selector** (sidebar): Switch between 🇺🇸 US and 🇮🇳 India (Nifty 50) markets
+- **Sidebar Navigation**: Switch between analysis pages
+- **Interactive Charts**: Hover for details, zoom, pan, download PNG
+- **Data Tables**: Sort and filter all performance tables
 
 ## Tips
 
-1. Start with the **Overview** page to get a quick summary
-2. Use **Performance Analysis** to deep-dive into specific strategies
-3. Check **Benchmark Comparison** to validate ML advantage
-4. Explore **Clustering Analysis** to understand stock groupings
-5. Review **Risk Analysis** for comprehensive risk metrics
-
-## Keyboard Shortcuts
-
-- `R` - Rerun the dashboard (refresh data)
-- `C` - Clear cache
-- `S` - View settings
+1. Start with **Overview** for a quick summary across all strategies
+2. Use **Benchmark Comparison** to read the alpha verdict and value-add scorecard
+3. Check **Performance Analysis** for drawdown curves and rolling metrics
+4. Explore **Clustering Analysis** to understand how stocks were grouped
+5. Use **Risk Analysis** for VaR/CVaR and correlation breakdown
 
 ## Troubleshooting
 
 ### Dashboard won't start
 ```bash
 pip install --upgrade streamlit plotly
+streamlit run dashboard.py
 ```
 
-### Data not loading
-Make sure you've run the optimization first:
+### No data showing for a market
+Run the full pipeline for that market:
 ```bash
-python main.py --full
+python collect_market_data.py --market INDIA
+python regenerate_strategies_market.py --market INDIA
+python run_benchmarks_market.py --market INDIA
+python run_clustering_market.py --market INDIA
 ```
 
 ### Port already in use
@@ -92,21 +92,3 @@ python main.py --full
 streamlit run dashboard.py --server.port 8502
 ```
 
-## Customization
-
-You can modify `dashboard.py` to:
-- Add new metrics
-- Change color schemes
-- Add custom visualizations
-- Export reports
-
-## Screenshots
-
-The dashboard includes:
-- 📊 Interactive charts powered by Plotly
-- 🎨 Modern, clean interface
-- 📱 Responsive design
-- 💾 Data caching for performance
-- 🔄 Real-time calculations
-
-Enjoy analyzing your ML-optimized portfolios! 🚀

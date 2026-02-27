@@ -77,12 +77,17 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-@st.cache_data
-def load_data():
-    """Load all project data"""
+def load_data(market: str = 'US'):
+    """Load all project data for specified market"""
     data = {}
+    market = market.upper()
     
     try:
+        # Get market-specific directories
+        results_dir = Config.get_market_results_dir(market)
+        raw_data_dir = Config.get_market_data_dir(market, 'raw')
+        benchmark_symbol = Config.get_benchmark_symbol(market)
+        
         # Load strategy performance
         strategies = ['risk_parity', 'mean_variance', 'max_sharpe', 'cluster_based', 'min_variance']
         data['portfolio_values'] = {}
@@ -91,57 +96,83 @@ def load_data():
         
         for strategy in strategies:
             # Portfolio values (returns)
-            values_path = os.path.join(Config.RESULTS_DIR, f'portfolio_values_{strategy}.csv')
+            values_path = os.path.join(results_dir, f'portfolio_values_{strategy}.csv')
             if os.path.exists(values_path):
                 data['portfolio_values'][strategy] = pd.read_csv(values_path, index_col=0, parse_dates=True)
             
             # Portfolio weights
-            weights_path = os.path.join(Config.RESULTS_DIR, f'portfolio_weights_{strategy}.csv')
+            weights_path = os.path.join(results_dir, f'portfolio_weights_{strategy}.csv')
             if os.path.exists(weights_path):
                 data['portfolio_weights'][strategy] = pd.read_csv(weights_path, index_col=0)
             
             # Performance metrics
-            metrics_path = os.path.join(Config.RESULTS_DIR, f'performance_metrics_{strategy}.json')
+            metrics_path = os.path.join(results_dir, f'performance_metrics_{strategy}.json')
             if os.path.exists(metrics_path):
                 with open(metrics_path, 'r') as f:
                     data['performance_metrics'][strategy] = json.load(f)
         
         # Load clustering results
-        cluster_path = os.path.join(Config.RESULTS_DIR, 'cluster_assignments_kmeans.csv')
+        cluster_path = os.path.join(results_dir, 'cluster_assignments_kmeans.csv')
         if os.path.exists(cluster_path):
             data['clusters'] = pd.read_csv(cluster_path)
         
-        cluster_analysis_path = os.path.join(Config.RESULTS_DIR, 'cluster_analysis_kmeans.csv')
+        cluster_analysis_path = os.path.join(results_dir, 'cluster_analysis_kmeans.csv')
         if os.path.exists(cluster_analysis_path):
             data['cluster_analysis'] = pd.read_csv(cluster_analysis_path)
         
         # Load benchmark comparison
-        benchmark_path = os.path.join(Config.RESULTS_DIR, 'benchmark_comparison_detailed.csv')
+        benchmark_path = os.path.join(results_dir, 'benchmark_comparison_detailed.csv')
         if os.path.exists(benchmark_path):
             data['benchmark_comparison'] = pd.read_csv(benchmark_path)
         
+        # Fallback: build benchmark_comparison from performance_metrics JSONs if file not found
+        if 'benchmark_comparison' not in data and data.get('performance_metrics'):
+            rows = []
+            for strategy, metrics in data['performance_metrics'].items():
+                rows.append({
+                    'Strategy': f'ML_{strategy}',
+                    'Total_Return': metrics.get('total_return', 0),
+                    'Annual_Return': metrics.get('annualized_return', 0),
+                    'Volatility': metrics.get('volatility', 0),
+                    'Sharpe_Ratio': metrics.get('sharpe_ratio', 0),
+                    'Sortino_Ratio': metrics.get('sortino_ratio', 0),
+                    'Max_Drawdown': metrics.get('max_drawdown', 0),
+                    'Calmar_Ratio': metrics.get('calmar_ratio', 0),
+                })
+            if rows:
+                data['benchmark_comparison'] = pd.DataFrame(rows)
+        
         # Load strategy comparison
-        strategy_comparison_path = os.path.join(Config.RESULTS_DIR, 'strategy_comparison_summary.csv')
+        strategy_comparison_path = os.path.join(results_dir, 'strategy_comparison_summary.csv')
         if os.path.exists(strategy_comparison_path):
             data['strategy_comparison'] = pd.read_csv(strategy_comparison_path, index_col=0)
         
-        # Load S&P 500 benchmark
-        spy_path = os.path.join(Config.RAW_DATA_DIR, 'SPY_benchmark.csv')
-        if os.path.exists(spy_path):
-            spy_df = pd.read_csv(spy_path)
+        # Load market benchmark
+        benchmark_filename = benchmark_symbol.replace('^', '') + '_benchmark.csv'
+        benchmark_path = os.path.join(raw_data_dir, benchmark_filename)
+        
+        if os.path.exists(benchmark_path):
+            benchmark_df = pd.read_csv(benchmark_path)
             # Get date column (skip first 2 rows if they are headers)
-            if spy_df.iloc[0, 0] == 'Ticker':
-                spy_df = spy_df.iloc[2:]  # Skip header rows
-            spy_dates = pd.to_datetime(spy_df.iloc[:, 0], errors='coerce')
-            spy_close = pd.to_numeric(spy_df.iloc[:, 1], errors='coerce')
+            if len(benchmark_df) > 2 and benchmark_df.iloc[0, 0] == 'Ticker':
+                benchmark_df = benchmark_df.iloc[2:]  # Skip header rows
+            
+            benchmark_dates = pd.to_datetime(benchmark_df.iloc[:, 0], errors='coerce')
+            benchmark_close = pd.to_numeric(benchmark_df.iloc[:, 1], errors='coerce')
             # Remove any NaN values
-            valid_idx = ~(spy_dates.isna() | spy_close.isna())
-            spy_series = pd.Series(spy_close[valid_idx].values, index=spy_dates[valid_idx].values)
-            spy_series = spy_series.sort_index()
-            data['sp500'] = spy_series
+            valid_idx = ~(benchmark_dates.isna() | benchmark_close.isna())
+            benchmark_series = pd.Series(benchmark_close[valid_idx].values, index=benchmark_dates[valid_idx].values)
+            benchmark_series = benchmark_series.sort_index()
+            data['benchmark'] = benchmark_series
+            data['benchmark_name'] = 'S&P 500' if market == 'US' else 'Nifty 50'
+        
+        data['market'] = market
+        data['has_data'] = len(data['portfolio_values']) > 0
         
     except Exception as e:
-        st.error(f"Error loading data: {e}")
+        st.error(f"Error loading data for {market} market: {e}")
+        data['has_data'] = False
+        data['market'] = market
     
     return data
 
@@ -155,26 +186,28 @@ def create_performance_chart(data):
         'max_sharpe': '#2ca02c',
         'cluster_based': '#d62728',
         'min_variance': '#9467bd',
-        'sp500': '#808080'
+        'benchmark': '#808080'
     }
     
-    # Add S&P 500 first as reference
-    if 'sp500' in data:
-        sp500_series = data['sp500']
+    benchmark_name = data.get('benchmark_name', 'Benchmark')
+    
+    # Add benchmark first as reference
+    if 'benchmark' in data:
+        benchmark_series = data['benchmark']
         # Align with portfolio dates
         if data['portfolio_values']:
             first_strategy = list(data['portfolio_values'].keys())[0]
             portfolio_dates = data['portfolio_values'][first_strategy].index
-            # Filter S&P 500 to matching dates
-            sp500_aligned = sp500_series[sp500_series.index.isin(portfolio_dates)]
-            if len(sp500_aligned) > 0:
-                sp500_cumulative = sp500_aligned / sp500_aligned.iloc[0]
+            # Filter benchmark to matching dates
+            benchmark_aligned = benchmark_series[benchmark_series.index.isin(portfolio_dates)]
+            if len(benchmark_aligned) > 0:
+                benchmark_cumulative = benchmark_aligned / benchmark_aligned.iloc[0]
                 fig.add_trace(go.Scatter(
-                    x=sp500_cumulative.index,
-                    y=sp500_cumulative.values,
+                    x=benchmark_cumulative.index,
+                    y=benchmark_cumulative.values,
                     mode='lines',
-                    name='S&P 500 (Benchmark)',
-                    line=dict(width=2, color=colors['sp500'], dash='dash'),
+                    name=f'{benchmark_name} (Benchmark)',
+                    line=dict(width=2, color=colors['benchmark'], dash='dash'),
                     hovertemplate='%{y:.2f}<br>%{x|%Y-%m-%d}<extra></extra>'
                 ))
     
@@ -197,7 +230,7 @@ def create_performance_chart(data):
         ))
     
     fig.update_layout(
-        title='Cumulative Portfolio Performance vs S&P 500',
+        title=f'Cumulative Portfolio Performance vs {benchmark_name}',
         xaxis_title='Date',
         yaxis_title='Cumulative Return (Normalized to 1.0)',
         hovermode='x unified',
@@ -216,16 +249,19 @@ def create_performance_chart(data):
 
 def create_risk_return_scatter(comparison_df):
     """Create risk-return scatter plot"""
+    plot_df = comparison_df.copy()
     # Separate ML strategies from benchmarks
-    comparison_df['Type'] = comparison_df['Strategy'].apply(
+    plot_df['Type'] = plot_df['Strategy'].apply(
         lambda x: 'ML Strategy' if x.startswith('ML_') else 'Benchmark'
     )
-    
+    # Bubble size must be positive
+    plot_df['BubbleSize'] = plot_df['Sharpe_Ratio'].clip(lower=0.05)
+
     fig = px.scatter(
-        comparison_df,
+        plot_df,
         x='Volatility',
         y='Annual_Return',
-        size='Sharpe_Ratio',
+        size='BubbleSize',
         color='Type',
         hover_name='Strategy',
         hover_data={
@@ -373,14 +409,31 @@ def main():
     st.sidebar.title("📊 Portfolio Optimizer")
     st.sidebar.markdown("### ML-Enhanced Portfolio Analysis")
     
-    # Load data
-    with st.spinner("Loading portfolio data..."):
-        data = load_data()
+    # Market Selector
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("### 🌍 Select Market")
+    market = st.sidebar.selectbox(
+        "Market",
+        options=['US', 'INDIA'],
+        format_func=lambda x: '🇺🇸 United States' if x == 'US' else '🇮🇳 India (Nifty 50)',
+        help="Choose between US stocks or Indian stocks (Nifty 50)"
+    )
     
-    if not data:
-        st.error("⚠️ No data found. Please run the optimization pipeline first.")
-        st.code("python main.py --full")
+    # Load data for selected market
+    with st.spinner(f"Loading {market} market data..."):
+        data = load_data(market)
+    
+    if not data.get('has_data', False):
+        st.error(f"⚠️ No data found for {market} market. Please run data collection and optimization first.")
+        st.markdown(f"### Setup {market} Market:")
+        st.markdown(f"1. **Collect Data:**")
+        st.code(f"python collect_market_data.py --market {market}")
+        st.markdown(f"2. **Run Optimization:**")
+        st.code(f"python regenerate_strategies_market.py --market {market}")
         st.stop()
+    
+    st.sidebar.success(f"✓ {market} market data loaded")
+    st.sidebar.markdown("---")
     
     # Navigation
     page = st.sidebar.radio(
@@ -391,7 +444,9 @@ def main():
     
     st.sidebar.markdown("---")
     st.sidebar.info(
-        "**About**: This dashboard displays results from ML-enhanced portfolio optimization "
+        f"**Market**: {market}  \n"
+        f"**Benchmark**: {data.get('benchmark_name', 'N/A')}  \n"
+        f"**About**: This dashboard displays results from ML-enhanced portfolio optimization "
         "using stock clustering and advanced optimization algorithms."
     )
     
@@ -399,7 +454,7 @@ def main():
     # 🏠 OVERVIEW PAGE
     # ============================================
     if page == "🏠 Overview":
-        st.title("🏠 Portfolio Optimization Dashboard")
+        st.title(f"🏠 Portfolio Optimization Dashboard - {market} Market")
         st.markdown("### ML-Enhanced Investment Strategy Analysis")
         
         # Key Metrics Row
@@ -779,7 +834,9 @@ def main():
     elif page == "⚖️ Risk Analysis":
         st.title("⚖️ Risk Analysis")
         
-        if 'benchmark_comparison' in data:
+        if 'benchmark_comparison' not in data:
+            st.warning("⚠️ Risk analysis data not available. Please run the optimization pipeline first.")
+        elif 'benchmark_comparison' in data:
             comparison_df = data['benchmark_comparison']
             
             # Risk metrics comparison
@@ -839,69 +896,268 @@ def main():
     # ============================================
     elif page == "🏆 Benchmark Comparison":
         st.title("🏆 Benchmark Comparison")
-        
-        if 'benchmark_comparison' in data:
+
+        if 'benchmark_comparison' not in data:
+            st.warning("⚠️ Benchmark comparison data not found.")
+        else:
             comparison_df = data['benchmark_comparison']
-            
-            st.markdown("### ML Strategies vs Simple Benchmarks")
-            
-            # Key insight
             ml_strategies = comparison_df[comparison_df['Strategy'].str.startswith('ML_')]
             benchmarks = comparison_df[~comparison_df['Strategy'].str.startswith('ML_')]
-            
-            # Check if we have both ML strategies and benchmarks
-            if len(ml_strategies) == 0 or len(benchmarks) == 0:
-                st.warning("⚠️ Benchmark comparison data incomplete. Showing available strategies only.")
-                st.markdown("### Available Strategies")
-                st.dataframe(
-                    comparison_df.style.format({
-                        'Total_Return': '{:.2%}',
-                        'Annual_Return': '{:.2%}',
-                        'Volatility': '{:.2%}',
-                        'Sharpe_Ratio': '{:.3f}',
-                        'Sortino_Ratio': '{:.3f}',
-                        'Max_Drawdown': '{:.2%}',
-                        'Calmar_Ratio': '{:.3f}'
-                    }).background_gradient(cmap='RdYlGn', subset=['Sharpe_Ratio'])
-                )
-                return
-            
+            has_benchmarks = len(benchmarks) > 0
+
             best_ml = ml_strategies.loc[ml_strategies['Sharpe_Ratio'].idxmax()]
-            best_benchmark = benchmarks.loc[benchmarks['Sharpe_Ratio'].idxmax()]
-            
-            col1, col2, col3 = st.columns(3)
-            
-            with col1:
-                st.success(f"**Best ML Strategy**\n\n{best_ml['Strategy'].replace('ML_', '').replace('_', ' ').title()}")
-                st.metric("Sharpe Ratio", f"{best_ml['Sharpe_Ratio']:.3f}")
-                st.metric("Annual Return", f"{best_ml['Annual_Return']*100:.2f}%")
-            
-            with col2:
-                st.info(f"**Best Benchmark**\n\n{best_benchmark['Strategy'].replace('_', ' ').title()}")
-                st.metric("Sharpe Ratio", f"{best_benchmark['Sharpe_Ratio']:.3f}")
-                st.metric("Annual Return", f"{best_benchmark['Annual_Return']*100:.2f}%")
-            
-            with col3:
-                improvement = ((best_ml['Sharpe_Ratio'] - best_benchmark['Sharpe_Ratio']) / abs(best_benchmark['Sharpe_Ratio'])) * 100
-                st.warning("**Performance Gap**")
-                st.metric("Sharpe Improvement", f"{improvement:+.2f}%")
-                
-                if improvement > 0:
-                    st.success("✅ ML adds value!")
+            best_ml_name = best_ml['Strategy'].replace('ML_', '').replace('_', ' ').title()
+
+            # identify market index row (SPY/Nifty) and passive benchmarks
+            INDEX_KEYWORDS = ['SPY', 'Nifty50', 'SP500', 'Index']
+            index_rows = benchmarks[benchmarks['Strategy'].apply(
+                lambda s: any(k.lower() in s.lower() for k in INDEX_KEYWORDS))]
+            passive_rows = benchmarks[~benchmarks['Strategy'].apply(
+                lambda s: any(k.lower() in s.lower() for k in INDEX_KEYWORDS + ['Best_Stock', 'Worst_Stock']))]
+
+            best_passive = (passive_rows if len(passive_rows) > 0 else benchmarks).loc[
+                (passive_rows if len(passive_rows) > 0 else benchmarks)['Sharpe_Ratio'].idxmax()
+            ] if has_benchmarks else None
+
+            market_index = index_rows.iloc[0] if len(index_rows) > 0 else None
+            ew_rows = comparison_df[comparison_df['Strategy'].str.contains('Equal_Weight', case=False)]
+            equal_weight = ew_rows.iloc[0] if len(ew_rows) > 0 else None
+            cw_rows = comparison_df[comparison_df['Strategy'].str.contains('Cap_Weighted', case=False)]
+            cap_weight = cw_rows.iloc[0] if len(cw_rows) > 0 else None
+
+            # ═══════════════════════════════════════════════════════════════
+            # SECTION 1 — VERDICT BANNER
+            # ═══════════════════════════════════════════════════════════════
+            st.markdown("## 🎯 Are ML Strategies Worth Following?")
+
+            if has_benchmarks and best_passive is not None:
+                sharpe_vs_passive = best_ml['Sharpe_Ratio'] - best_passive['Sharpe_Ratio']
+                ret_vs_passive    = best_ml['Annual_Return'] - best_passive['Annual_Return']
+                ml_beats_passive  = sharpe_vs_passive > 0
+
+                if market_index is not None:
+                    sharpe_vs_index = best_ml['Sharpe_Ratio'] - market_index['Sharpe_Ratio']
+                    ret_vs_index    = best_ml['Annual_Return'] - market_index['Annual_Return']
+                    ml_beats_index  = sharpe_vs_index > 0
                 else:
-                    st.error("❌ Underperforming")
-            
+                    sharpe_vs_index = sharpe_vs_passive
+                    ret_vs_index    = ret_vs_passive
+                    ml_beats_index  = ml_beats_passive
+
+                beats_both = ml_beats_passive and ml_beats_index
+                beats_one  = ml_beats_passive or ml_beats_index
+
+                if beats_both:
+                    verdict_color = "#1a7a1a"
+                    verdict_icon  = "✅"
+                    verdict_text  = "YES — ML Strategies Deliver Real Alpha"
+                    verdict_sub   = (
+                        f"The best ML strategy (<b>{best_ml_name}</b>) outperforms both the market index "
+                        f"and simple passive portfolios on a risk-adjusted basis. "
+                        f"It generates <b>{ret_vs_index*100:+.1f}% extra annual return</b> vs the market index "
+                        f"with a Sharpe ratio improvement of <b>{sharpe_vs_index:+.3f}</b>."
+                    )
+                elif beats_one:
+                    verdict_color = "#b38000"
+                    verdict_icon  = "⚠️"
+                    verdict_text  = "PARTIALLY — ML Adds Value Over Some Benchmarks"
+                    verdict_sub   = (
+                        f"<b>{best_ml_name}</b> beats some benchmarks but not all. "
+                        f"Sharpe vs best passive benchmark: <b>{sharpe_vs_passive:+.3f}</b>. "
+                        f"Consider the strategy selectively."
+                    )
+                else:
+                    verdict_color = "#8b0000"
+                    verdict_icon  = "❌"
+                    verdict_text  = "NO — Passive Strategies Currently Outperform"
+                    verdict_sub   = (
+                        f"Simple passive strategies beat the best ML strategy on risk-adjusted returns. "
+                        f"Sharpe deficit vs best passive: <b>{sharpe_vs_passive:.3f}</b>. "
+                        f"Review the model or market regime."
+                    )
+
+                st.markdown(
+                    f"""
+                    <div style="background:{verdict_color}22; border-left:6px solid {verdict_color};
+                                padding:20px 24px; border-radius:8px; margin-bottom:16px;">
+                        <h2 style="color:{verdict_color}; margin:0 0 6px 0;">{verdict_icon} {verdict_text}</h2>
+                        <p style="font-size:15px; margin:0; color:#ddd;">{verdict_sub}</p>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
+                # ── Value-add scorecard ───────────────────────────────────
+                st.markdown("### 📐 Value Added vs Benchmarks")
+                cols = st.columns(4)
+
+                def delta_metric(col, label, ml_val, bm_val, fmt_pct=False):
+                    diff = ml_val - bm_val
+                    bm_str = f"{bm_val*100:.2f}%" if fmt_pct else f"{bm_val:.3f}"
+                    diff_str = f"{diff*100:+.2f}%" if fmt_pct else f"{diff:+.3f}"
+                    col.metric(label, f"{ml_val*100:.2f}%" if fmt_pct else f"{ml_val:.3f}",
+                               delta=f"{diff_str} vs {bm_str}",
+                               delta_color="normal" if diff >= 0 else "inverse")
+
+                with cols[0]:
+                    st.caption("vs Market Index" if market_index is not None else "Best ML")
+                    if market_index is not None:
+                        delta_metric(cols[0], "Sharpe Ratio", best_ml['Sharpe_Ratio'], market_index['Sharpe_Ratio'])
+                    else:
+                        st.metric("Sharpe Ratio", f"{best_ml['Sharpe_Ratio']:.3f}")
+                with cols[1]:
+                    st.caption("vs Market Index" if market_index is not None else "Best ML")
+                    if market_index is not None:
+                        delta_metric(cols[1], "Annual Return", best_ml['Annual_Return'], market_index['Annual_Return'], fmt_pct=True)
+                    else:
+                        st.metric("Annual Return", f"{best_ml['Annual_Return']*100:.2f}%")
+                with cols[2]:
+                    st.caption("vs Equal Weight")
+                    if equal_weight is not None:
+                        delta_metric(cols[2], "Sharpe Ratio", best_ml['Sharpe_Ratio'], equal_weight['Sharpe_Ratio'])
+                    else:
+                        st.metric("Max Drawdown", f"{best_ml['Max_Drawdown']*100:.2f}%")
+                with cols[3]:
+                    st.caption("vs Cap Weighted")
+                    if cap_weight is not None:
+                        delta_metric(cols[3], "Sharpe Ratio", best_ml['Sharpe_Ratio'], cap_weight['Sharpe_Ratio'])
+                    else:
+                        st.metric("Calmar Ratio", f"{best_ml['Calmar_Ratio']:.3f}")
+
+                st.markdown("---")
+
+                # ── Cumulative wealth bar ─────────────────────────────────
+                st.markdown("### 💰 Cumulative Wealth: $1 Invested")
+                wealth_rows = []
+                for _, row in comparison_df.iterrows():
+                    is_ml = row['Strategy'].startswith('ML_')
+                    label = row['Strategy'].replace('ML_', '').replace('_', ' ').title()
+                    wealth_rows.append({
+                        'Strategy': label,
+                        'Final Value': 1 + row['Total_Return'],
+                        'Type': 'ML Strategy' if is_ml else 'Benchmark',
+                    })
+                wealth_df = pd.DataFrame(wealth_rows).sort_values('Final Value', ascending=True)
+                fig_wealth = go.Figure(go.Bar(
+                    x=wealth_df['Final Value'],
+                    y=wealth_df['Strategy'],
+                    orientation='h',
+                    marker=dict(
+                        color=wealth_df['Type'].map({'ML Strategy': '#2196F3', 'Benchmark': '#FF9800'}),
+                    ),
+                    text=[f"${v:.2f}" for v in wealth_df['Final Value']],
+                    textposition='auto',
+                ))
+                fig_wealth.add_vline(x=1.0, line_dash='dash', line_color='red',
+                                     annotation_text='Break-even ($1)', annotation_position='top right')
+                fig_wealth.update_layout(
+                    title='Final portfolio value for every $1 invested (blue = ML, orange = Benchmark)',
+                    xaxis_title='Portfolio Value ($)',
+                    template='plotly_white', height=420,
+                    showlegend=False,
+                )
+                st.plotly_chart(fig_wealth, width='stretch')
+
+                # ── Alpha table ───────────────────────────────────────────
+                with st.expander("📋 Full Alpha Table — ML vs Every Benchmark", expanded=False):
+                    alpha_rows = []
+                    for _, bm in benchmarks.iterrows():
+                        bm_label = bm['Strategy'].replace('_', ' ')
+                        alpha_rows.append({
+                            'Benchmark': bm_label,
+                            'Benchmark Sharpe': bm['Sharpe_Ratio'],
+                            'Best ML Sharpe': best_ml['Sharpe_Ratio'],
+                            'Sharpe Alpha': best_ml['Sharpe_Ratio'] - bm['Sharpe_Ratio'],
+                            'Benchmark Ann. Return': bm['Annual_Return'],
+                            'Best ML Ann. Return': best_ml['Annual_Return'],
+                            'Return Alpha': best_ml['Annual_Return'] - bm['Annual_Return'],
+                            'ML Max DD': best_ml['Max_Drawdown'],
+                            'BM Max DD': bm['Max_Drawdown'],
+                            'DD Improvement': abs(bm['Max_Drawdown']) - abs(best_ml['Max_Drawdown']),
+                        })
+                    alpha_df = pd.DataFrame(alpha_rows)
+                    st.dataframe(
+                        alpha_df.style.format({
+                            'Benchmark Sharpe': '{:.3f}', 'Best ML Sharpe': '{:.3f}', 'Sharpe Alpha': '{:+.3f}',
+                            'Benchmark Ann. Return': '{:.2%}', 'Best ML Ann. Return': '{:.2%}', 'Return Alpha': '{:+.2%}',
+                            'ML Max DD': '{:.2%}', 'BM Max DD': '{:.2%}', 'DD Improvement': '{:+.2%}',
+                        }).background_gradient(cmap='RdYlGn', subset=['Sharpe Alpha', 'Return Alpha', 'DD Improvement']),
+                        use_container_width=True,
+                    )
+
+                st.markdown("---")
+
+            else:
+                # No benchmark data — just show best ML summary
+                st.info("ℹ️ No benchmark data available. Showing ML strategies only.")
+
+            # ═══════════════════════════════════════════════════════════════
+            # SECTION 2 — BEST STRATEGY DETAILS
+            # ═══════════════════════════════════════════════════════════════
+            st.markdown(f"### 🥇 Best ML Strategy: {best_ml_name}")
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("Sharpe Ratio", f"{best_ml['Sharpe_Ratio']:.3f}")
+            with col2:
+                st.metric("Annual Return", f"{best_ml['Annual_Return']*100:.2f}%")
+            with col3:
+                st.metric("Volatility", f"{best_ml['Volatility']*100:.2f}%")
+            with col4:
+                st.metric("Max Drawdown", f"{best_ml['Max_Drawdown']*100:.2f}%")
+
             st.markdown("---")
-            
-            # Risk-return scatter
+
+            # ═══════════════════════════════════════════════════════════════
+            # SECTION 3 — SIDE-BY-SIDE BAR CHARTS
+            # ═══════════════════════════════════════════════════════════════
+            st.markdown("### 📊 Strategy Comparison")
+            plot_df = comparison_df.copy()
+            plot_df['Label'] = plot_df['Strategy'].str.replace('ML_', '').str.replace('_', ' ').str.title()
+            plot_df['Color'] = plot_df['Strategy'].apply(lambda s: '#2196F3' if s.startswith('ML_') else '#FF9800')
+
+            col1, col2 = st.columns(2)
+            with col1:
+                sorted_ret = plot_df.sort_values('Annual_Return', ascending=True)
+                fig_ret = go.Figure(go.Bar(
+                    x=sorted_ret['Annual_Return'] * 100,
+                    y=sorted_ret['Label'],
+                    orientation='h',
+                    marker_color=sorted_ret['Color'].tolist(),
+                    text=[f"{v*100:.1f}%" for v in sorted_ret['Annual_Return']],
+                    textposition='auto',
+                ))
+                fig_ret.update_layout(title='Annual Return (blue=ML, orange=Benchmark)',
+                                      xaxis_title='Annual Return (%)',
+                                      template='plotly_white', height=420)
+                st.plotly_chart(fig_ret, width='stretch')
+
+            with col2:
+                sorted_sr = plot_df.sort_values('Sharpe_Ratio', ascending=True)
+                fig_sr = go.Figure(go.Bar(
+                    x=sorted_sr['Sharpe_Ratio'],
+                    y=sorted_sr['Label'],
+                    orientation='h',
+                    marker_color=sorted_sr['Color'].tolist(),
+                    text=[f"{v:.3f}" for v in sorted_sr['Sharpe_Ratio']],
+                    textposition='auto',
+                ))
+                fig_sr.update_layout(title='Sharpe Ratio (blue=ML, orange=Benchmark)',
+                                     xaxis_title='Sharpe Ratio',
+                                     template='plotly_white', height=420)
+                st.plotly_chart(fig_sr, width='stretch')
+
+            # ═══════════════════════════════════════════════════════════════
+            # SECTION 4 — RISK-RETURN SCATTER
+            # ═══════════════════════════════════════════════════════════════
+            st.markdown("### 📈 Risk-Return Profile")
             st.plotly_chart(create_risk_return_scatter(comparison_df), width='stretch')
-            
-            # Complete comparison table
-            st.markdown("### Complete Performance Comparison")
-            
+
+            # ═══════════════════════════════════════════════════════════════
+            # SECTION 5 — FULL TABLE
+            # ═══════════════════════════════════════════════════════════════
+            st.markdown("### Complete Performance Table")
             display_df = comparison_df.copy()
-            display_df['Strategy'] = display_df['Strategy'].str.replace('ML_', '').str.replace('_', ' ')
-            
+            display_df['Strategy'] = display_df['Strategy'].str.replace('ML_', 'ML: ').str.replace('_', ' ')
             st.dataframe(
                 display_df.style.format({
                     'Total_Return': '{:.2%}',
@@ -910,13 +1166,12 @@ def main():
                     'Sharpe_Ratio': '{:.3f}',
                     'Sortino_Ratio': '{:.3f}',
                     'Max_Drawdown': '{:.2%}',
-                    'Calmar_Ratio': '{:.3f}'
+                    'Calmar_Ratio': '{:.3f}',
                 }).background_gradient(cmap='RdYlGn', subset=['Sharpe_Ratio', 'Annual_Return', 'Calmar_Ratio'])
                 .background_gradient(cmap='RdYlGn_r', subset=['Volatility', 'Max_Drawdown']),
-                height=600
+                height=420,
+                use_container_width=True,
             )
-        else:
-            st.warning("⚠️ Benchmark comparison data not found.")
     
     # Footer
     st.sidebar.markdown("---")
