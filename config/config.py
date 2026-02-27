@@ -9,8 +9,21 @@ class Config:
     """Main configuration class for portfolio optimization"""
     
     # Data settings
-    DATA_START_DATE = "2018-01-01"
+    DATA_START_DATE = "2010-01-01"   # Collect 15 years of history
     DATA_END_DATE = datetime.now().strftime("%Y-%m-%d")
+
+    # Walk-forward rolling training window (trading days).
+    # At each monthly rebalancing the optimizer uses only the most recent
+    # TRAINING_WINDOW_DAYS of data so it adapts to the current market regime
+    # rather than being anchored to distant historical regimes.
+    # 756 ≈ 3 years of daily data.  Set to None to use all available history.
+    TRAINING_WINDOW_DAYS = 756
+
+    # First date at which we BEGIN recording portfolio performance.
+    # Data collected before this date is used purely as warm-up for the
+    # rolling training window.
+    BACKTEST_START_DATE_US    = "2013-01-01"   # 3 year warm-up from 2010
+    BACKTEST_START_DATE_INDIA = "2013-01-01"
     
     # Market selection
     AVAILABLE_MARKETS = ['US', 'INDIA']

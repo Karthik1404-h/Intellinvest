@@ -49,8 +49,20 @@ def regenerate_strategies(market: str = 'US'):
     # Initialize backtester
     backtester = PortfolioBacktester()
     
+    # Load cluster data for cluster_based strategy
+    cluster_data = None
+    cluster_file = os.path.join(results_dir, 'cluster_assignments_kmeans.csv')
+    if os.path.exists(cluster_file):
+        cluster_data = pd.read_csv(cluster_file)
+        logger.info(f"Loaded cluster data: {len(cluster_data)} assignments from {cluster_file}")
+    else:
+        logger.warning(f"Cluster file not found: {cluster_file} — cluster_based will fall back to mean-variance")
+
     # Strategies to regenerate
-    strategies = ['mean_variance', 'max_sharpe', 'min_variance', 'cluster_based', 'risk_parity']
+    strategies = [
+        'mean_variance', 'max_sharpe', 'min_variance', 'cluster_based',
+        'risk_parity', 'momentum_filter', 'black_litterman', 'concentrated_momentum'
+    ]
     
     logger.info(f"\nRegenerating {len(strategies)} strategies: {strategies}")
     logger.info("=" * 80)
@@ -63,12 +75,22 @@ def regenerate_strategies(market: str = 'US'):
         logger.info(f"{'='*80}")
         
         try:
-            # Run backtest
+            # Determine backtest start date — allow 3 years warm-up from 2010
+            start_date = Config.BACKTEST_START_DATE_INDIA if market == 'INDIA' \
+                else Config.BACKTEST_START_DATE_US
+
+            # Extra kwargs for strategies that need them
+            extra_kwargs = {}
+            if strategy == 'cluster_based' and cluster_data is not None:
+                extra_kwargs['cluster_data'] = cluster_data
+
+            # Run backtest  (training_window comes from Config.TRAINING_WINDOW_DAYS)
             result = backtester.run_backtest(
-                price_data, 
+                price_data,
                 optimization_method=strategy,
-                start_date='2020-01-01',
-                rebalancing_freq='monthly'
+                start_date=start_date,
+                rebalancing_freq='monthly',
+                **extra_kwargs
             )
             
             results[strategy] = result

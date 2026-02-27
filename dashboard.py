@@ -89,7 +89,7 @@ def load_data(market: str = 'US'):
         benchmark_symbol = Config.get_benchmark_symbol(market)
         
         # Load strategy performance
-        strategies = ['risk_parity', 'mean_variance', 'max_sharpe', 'cluster_based', 'min_variance']
+        strategies = ['risk_parity', 'mean_variance', 'max_sharpe', 'cluster_based', 'min_variance', 'momentum_filter', 'black_litterman', 'concentrated_momentum']
         data['portfolio_values'] = {}
         data['portfolio_weights'] = {}
         data['performance_metrics'] = {}
@@ -186,6 +186,9 @@ def create_performance_chart(data):
         'max_sharpe': '#2ca02c',
         'cluster_based': '#d62728',
         'min_variance': '#9467bd',
+        'momentum_filter': '#8c564b',
+        'black_litterman': '#e377c2',
+        'concentrated_momentum': '#17becf',
         'benchmark': '#808080'
     }
     

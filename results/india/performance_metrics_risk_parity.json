@@ -1,14 +1,14 @@
 {
-  "total_return": 2.229298937976501,
-  "annualized_return": 0.2468501120443134,
-  "volatility": 0.13378978241772516,
-  "sharpe_ratio": 1.5671978272164473,
-  "sortino_ratio": 2.1168327615470477,
-  "max_drawdown": -0.163776450756902,
-  "calmar_ratio": 1.5072381340753316,
+  "total_return": 6.739180209438821,
+  "annualized_return": 0.18283589892118735,
+  "volatility": 0.14183485108456603,
+  "sharpe_ratio": 1.1147008120074233,
+  "sortino_ratio": 1.3274991314749496,
+  "max_drawdown": -0.3924073937560678,
+  "calmar_ratio": 0.46593387849068824,
   "initial_capital": 1000000,
-  "final_capital": 3248947.5543679744,
-  "total_transaction_costs": 257.6557519470184,
-  "average_turnover": 0.0021232089555995055,
-  "number_of_rebalances": 73
+  "final_capital": 7754082.443075364,
+  "total_transaction_costs": 2423.7758293626007,
+  "average_turnover": 0.005518500050421649,
+  "number_of_rebalances": 157
 }

@@ -14,6 +14,8 @@ import pandas as pd
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(__file__))
+sys.stdout.reconfigure(encoding='utf-8')
+
 from config import Config
 from src.evaluation.backtesting import PerformanceMetrics
 
@@ -34,7 +36,7 @@ def processed_dir(market: str) -> str:
 def load_ml_strategies(market: str) -> dict:
     rdir = results_dir(market)
     strategies = {}
-    names = ['risk_parity', 'mean_variance', 'max_sharpe', 'cluster_based', 'min_variance']
+    names = ['risk_parity', 'mean_variance', 'max_sharpe', 'cluster_based', 'min_variance', 'momentum_filter', 'black_litterman', 'concentrated_momentum']
 
     for name in names:
         path = os.path.join(rdir, f'portfolio_values_{name}.csv')

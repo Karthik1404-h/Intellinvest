@@ -148,34 +148,52 @@ class PortfolioBacktester:
             Dictionary with backtest results
         """
         logger.info(f"Running backtest for {optimization_method} strategy")
-        
-        # Prepare data
-        if start_date:
-            price_data = price_data[price_data.index >= start_date]
+
+        # ── Full dataset (includes pre-start_date warm-up history) ──────────
+        all_data = price_data.copy()
         if end_date:
-            price_data = price_data[price_data.index <= end_date]
-        
-        # Get rebalancing dates
-        rebalancing_dates = self._get_rebalancing_dates(price_data.index, rebalancing_freq)
-        
+            all_data = all_data[all_data.index <= end_date]
+
+        # ── Trading period (determines rebalancing schedule) ────────────────
+        # start_date controls when we BEGIN tracking portfolio value.
+        # The optimizer is still allowed to look back into the warm-up period
+        # (limited by TRAINING_WINDOW_DAYS) so it has context on day 1.
+        trading_data = all_data.copy()
+        if start_date:
+            trading_data = trading_data[trading_data.index >= start_date]
+
+        # How far back the optimizer looks at each rebalancing date.
+        # Reads from Config; callers can also override via training_window_days kwarg.
+        training_window = optimization_kwargs.pop('training_window_days', None)
+        if training_window is None:
+            training_window = getattr(Config, 'TRAINING_WINDOW_DAYS', None)
+
+        # ── Rebalancing schedule ────────────────────────────────────────────
+        rebalancing_dates = self._get_rebalancing_dates(trading_data.index, rebalancing_freq)
+
         # Initialize tracking variables
         portfolio_values = []
         portfolio_weights_history = []
         turnover_history = []
         transaction_costs_history = []
-        
+
         current_capital = initial_capital
         current_weights = None
-        
+
         from src.optimization import PortfolioOptimizer
         optimizer = PortfolioOptimizer()
-        
+
         # Run backtest
         for i, rebal_date in enumerate(rebalancing_dates[:-1]):
             try:
-                # Get data up to rebalancing date
-                historical_data = price_data[price_data.index <= rebal_date]
-                
+                # Get ALL historical data up to rebalancing date (warm-up included)
+                historical_data = all_data[all_data.index <= rebal_date]
+
+                # Apply rolling training window so the optimizer adapts to the
+                # current market regime rather than distant historical periods.
+                if training_window and len(historical_data) > training_window:
+                    historical_data = historical_data.iloc[-training_window:]
+
                 if len(historical_data) < 100:  # Need sufficient history
                     continue
                 
