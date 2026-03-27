@@ -15,6 +15,13 @@ from datetime import datetime
 
 from config import Config
 
+
+PRIMARY_ACCENT = '#22d3ee'
+SECONDARY_ACCENT = '#60a5fa'
+TEXT_PRIMARY = '#e2e8f0'
+TEXT_MUTED = '#cbd5e1'
+GRID_COLOR = 'rgba(148, 163, 184, 0.24)'
+
 # Page configuration
 st.set_page_config(
     page_title="Portfolio Optimizer Dashboard",
@@ -26,56 +33,254 @@ st.set_page_config(
 # Custom CSS for better styling
 st.markdown("""
     <style>
+    @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Manrope:wght@400;500;600;700&display=swap');
+
+    :root {
+        --bg-soft: #070d1a;
+        --bg-card: rgba(15, 23, 42, 0.72);
+        --bg-card-strong: rgba(15, 23, 42, 0.92);
+        --border-soft: rgba(148, 163, 184, 0.24);
+        --text-primary: #e2e8f0;
+        --text-muted: #cbd5e1;
+        --accent: #22d3ee;
+        --accent-strong: #60a5fa;
+        --shadow-soft: 0 18px 40px rgba(2, 6, 23, 0.45);
+        --radius-lg: 16px;
+        --radius-md: 12px;
+    }
+
+    [data-testid="stAppViewContainer"] {
+        background:
+            radial-gradient(circle at 12% -24%, rgba(59, 130, 246, 0.34) 0, rgba(59, 130, 246, 0) 44%),
+            radial-gradient(circle at 108% 8%, rgba(34, 211, 238, 0.28) 0, rgba(34, 211, 238, 0) 42%),
+            linear-gradient(180deg, #020617 0%, #0b1220 48%, #111827 100%);
+    }
+
     .main {
-        padding: 0rem 1rem;
+        padding: 0.6rem 1.25rem 1.4rem;
+        font-family: 'Manrope', sans-serif;
+        color: var(--text-primary) !important;
     }
+
+    /* Force readable text contrast across all pages/components */
+    .stApp,
+    .stApp p,
+    .stApp span,
+    .stApp li,
+    .stApp label,
+    .stApp small,
+    .stApp div {
+        color: var(--text-primary);
+    }
+
+    [data-testid="stMarkdownContainer"] h1,
+    [data-testid="stMarkdownContainer"] h2,
+    [data-testid="stMarkdownContainer"] h3,
+    [data-testid="stMarkdownContainer"] h4,
+    [data-testid="stMarkdownContainer"] h5,
+    [data-testid="stMarkdownContainer"] h6 {
+        color: var(--text-primary) !important;
+    }
+
+    [data-testid="stMarkdownContainer"] p,
+    [data-testid="stMarkdownContainer"] li,
+    [data-testid="stMarkdownContainer"] span {
+        color: var(--text-muted) !important;
+    }
+
+    [data-testid="stSidebar"] * {
+        color: #dbeafe !important;
+    }
+
+    [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p,
+    [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] li,
+    [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] span,
+    [data-testid="stSidebar"] label {
+        color: #cbd5e1 !important;
+    }
+
+    [data-testid="stSidebar"] {
+        background: linear-gradient(180deg, rgba(2, 6, 23, 0.95) 0%, rgba(15, 23, 42, 0.9) 100%);
+        border-right: 1px solid var(--border-soft);
+    }
+
+    .dashboard-header {
+        background: linear-gradient(130deg, rgba(15, 23, 42, 0.9), rgba(30, 41, 59, 0.78));
+        border: 1px solid var(--border-soft);
+        border-radius: var(--radius-lg);
+        padding: 18px 20px;
+        backdrop-filter: blur(14px);
+        -webkit-backdrop-filter: blur(14px);
+        box-shadow: var(--shadow-soft);
+        margin-bottom: 16px;
+    }
+
+    .dashboard-header h1 {
+        margin: 0;
+        font-family: 'Space Grotesk', sans-serif;
+        font-size: clamp(1.4rem, 2.2vw, 2rem);
+        color: var(--text-primary);
+        letter-spacing: -0.01em;
+    }
+
+    .dashboard-header p {
+        margin: 6px 0 0;
+        color: var(--text-muted);
+        font-size: 0.95rem;
+    }
+
+    .dashboard-chip {
+        display: inline-block;
+        margin-top: 10px;
+        padding: 5px 10px;
+        border-radius: 999px;
+        border: 1px solid rgba(34, 211, 238, 0.45);
+        color: #a5f3fc;
+        background: rgba(34, 211, 238, 0.18);
+        font-weight: 600;
+        font-size: 0.78rem;
+    }
+
     .stMetric {
-        background-color: #f0f2f6;
-        padding: 15px;
-        border-radius: 10px;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        background: var(--bg-card);
+        border: 1px solid var(--border-soft);
+        border-radius: var(--radius-md);
+        box-shadow: var(--shadow-soft);
+        backdrop-filter: blur(10px);
+        -webkit-backdrop-filter: blur(10px);
+        padding: 16px;
     }
+
     .stMetric label {
-        color: #31333F !important;
+        color: #cbd5e1 !important;
         font-weight: 600 !important;
     }
+
     .stMetric [data-testid="stMetricValue"] {
-        color: #0e1117 !important;
-        font-size: 1.5rem !important;
+        color: var(--text-primary) !important;
+        font-family: 'Space Grotesk', sans-serif;
+        font-weight: 700 !important;
+        letter-spacing: -0.02em;
+    }
+
+    .stMetric [data-testid="stMetricDelta"] {
         font-weight: 600 !important;
     }
-    .stMetric [data-testid="stMetricDelta"] {
-        font-weight: 500 !important;
+
+    h2, h3 {
+        font-family: 'Space Grotesk', sans-serif;
+        color: var(--text-primary);
+        letter-spacing: -0.01em;
     }
-    .metric-card {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        padding: 20px;
-        border-radius: 10px;
-        color: white;
-        margin: 10px 0;
+
+    .stSelectbox label,
+    .stRadio label,
+    .stSlider label,
+    .stMultiSelect label {
+        color: #e2e8f0 !important;
+        font-weight: 600 !important;
     }
-    h1 {
-        color: #1f77b4;
-        font-weight: 700;
+
+    .stCaption {
+        color: #94a3b8 !important;
     }
-    h2 {
-        color: #2c3e50;
-        border-bottom: 2px solid #3498db;
-        padding-bottom: 10px;
+
+    [data-testid="stAlert"] {
+        background: rgba(15, 23, 42, 0.82) !important;
+        border: 1px solid rgba(148, 163, 184, 0.28) !important;
     }
-    h3 {
-        color: #2c3e50;
+
+    [data-testid="stAlert"] * {
+        color: #e2e8f0 !important;
     }
+
+    [data-testid="stDataFrame"] {
+        background: var(--bg-card-strong);
+        border-radius: var(--radius-md);
+        border: 1px solid var(--border-soft);
+    }
+
+    [data-testid="stPlotlyChart"] {
+        background: rgba(2, 6, 23, 0.36);
+        border: 1px solid var(--border-soft);
+        border-radius: var(--radius-md);
+        box-shadow: 0 8px 24px rgba(2, 6, 23, 0.45);
+        padding: 6px;
+    }
+
+    [data-testid="stExpander"] {
+        border-radius: var(--radius-md);
+        border: 1px solid var(--border-soft);
+        background: var(--bg-card);
+    }
+
     .stTabs [data-baseweb="tab-list"] {
-        gap: 24px;
+        gap: 10px;
     }
+
     .stTabs [data-baseweb="tab"] {
-        padding: 16px 24px;
-        background-color: #f0f2f6;
-        border-radius: 8px 8px 0 0;
+        background: rgba(15, 23, 42, 0.82);
+        border: 1px solid var(--border-soft);
+        border-radius: 10px;
+        padding: 10px 16px;
+    }
+
+    .stTabs [aria-selected="true"] {
+        background: linear-gradient(90deg, rgba(34, 211, 238, 0.26), rgba(96, 165, 250, 0.26));
+        border-color: rgba(34, 211, 238, 0.5);
+    }
+
+    @media (max-width: 900px) {
+        .main {
+            padding: 0.45rem 0.65rem 1rem;
+        }
+        .dashboard-header {
+            padding: 14px;
+        }
+        [data-testid="stPlotlyChart"] {
+            padding: 2px;
+        }
     }
     </style>
 """, unsafe_allow_html=True)
+
+
+def render_page_header(title: str, subtitle: str, badge_text: str = ""):
+    """Render a consistent page header in neo-glass style."""
+    badge_html = f"<span class='dashboard-chip'>{badge_text}</span>" if badge_text else ""
+    st.markdown(
+        f"""
+        <div class="dashboard-header">
+            <h1>{title}</h1>
+            <p>{subtitle}</p>
+            {badge_html}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def style_figure(fig: go.Figure, height: int = 460):
+    """Apply a consistent, professional Plotly style across all charts."""
+    fig.update_layout(
+        template='none',
+        paper_bgcolor='rgba(255,255,255,0)',
+        plot_bgcolor='rgba(15,23,42,0.78)',
+        font=dict(family='Manrope, Segoe UI, sans-serif', color=TEXT_PRIMARY, size=13),
+        title=dict(font=dict(family='Space Grotesk, Segoe UI, sans-serif', size=20, color=TEXT_PRIMARY), x=0.02),
+        legend=dict(
+            bgcolor='rgba(2,6,23,0.62)',
+            bordercolor='rgba(148,163,184,0.26)',
+            borderwidth=1,
+            font=dict(size=12),
+        ),
+        hoverlabel=dict(bgcolor='rgba(2,6,23,0.95)', font_size=12, font_family='Manrope', font_color='#e2e8f0'),
+        margin=dict(l=40, r=24, t=70, b=44),
+        height=height,
+    )
+    fig.update_xaxes(showgrid=True, gridcolor=GRID_COLOR, zeroline=False, linecolor='rgba(148, 163, 184, 0.45)', tickfont=dict(color=TEXT_MUTED), title_font=dict(color=TEXT_PRIMARY))
+    fig.update_yaxes(showgrid=True, gridcolor=GRID_COLOR, zeroline=False, linecolor='rgba(148, 163, 184, 0.45)', tickfont=dict(color=TEXT_MUTED), title_font=dict(color=TEXT_PRIMARY))
+    return fig
 
 def load_data(market: str = 'US'):
     """Load all project data for specified market"""
@@ -89,7 +294,7 @@ def load_data(market: str = 'US'):
         benchmark_symbol = Config.get_benchmark_symbol(market)
         
         # Load strategy performance
-        strategies = ['risk_parity', 'mean_variance', 'max_sharpe', 'cluster_based', 'min_variance']
+        strategies = ['risk_parity', 'mean_variance', 'max_sharpe', 'cluster_based', 'min_variance', 'momentum_filter', 'black_litterman', 'concentrated_momentum']
         data['portfolio_values'] = {}
         data['portfolio_weights'] = {}
         data['performance_metrics'] = {}
@@ -181,12 +386,15 @@ def create_performance_chart(data):
     fig = go.Figure()
     
     colors = {
-        'risk_parity': '#1f77b4',
-        'mean_variance': '#ff7f0e',
-        'max_sharpe': '#2ca02c',
-        'cluster_based': '#d62728',
-        'min_variance': '#9467bd',
-        'benchmark': '#808080'
+        'risk_parity': '#1f6feb',
+        'mean_variance': '#0ea5a4',
+        'max_sharpe': '#0891b2',
+        'cluster_based': '#2563eb',
+        'min_variance': '#0f766e',
+        'momentum_filter': '#14b8a6',
+        'black_litterman': '#0d9488',
+        'concentrated_momentum': '#0b7285',
+        'benchmark': '#64748b'
     }
     
     benchmark_name = data.get('benchmark_name', 'Benchmark')
@@ -207,7 +415,7 @@ def create_performance_chart(data):
                     y=benchmark_cumulative.values,
                     mode='lines',
                     name=f'{benchmark_name} (Benchmark)',
-                    line=dict(width=2, color=colors['benchmark'], dash='dash'),
+                    line=dict(width=2.2, color=colors['benchmark'], dash='dot'),
                     hovertemplate='%{y:.2f}<br>%{x|%Y-%m-%d}<extra></extra>'
                 ))
     
@@ -225,7 +433,7 @@ def create_performance_chart(data):
             y=cumulative.values,
             mode='lines',
             name=strategy.replace('_', ' ').title(),
-            line=dict(width=2.5, color=colors.get(strategy, '#000000')),
+            line=dict(width=2.8, color=colors.get(strategy, '#334155')),
             hovertemplate='%{y:.2f}<br>%{x|%Y-%m-%d}<extra></extra>'
         ))
     
@@ -234,7 +442,6 @@ def create_performance_chart(data):
         xaxis_title='Date',
         yaxis_title='Cumulative Return (Normalized to 1.0)',
         hovermode='x unified',
-        template='plotly_white',
         height=500,
         legend=dict(
             orientation="h",
@@ -244,8 +451,8 @@ def create_performance_chart(data):
             x=1
         )
     )
-    
-    return fig
+
+    return style_figure(fig, height=500)
 
 def create_risk_return_scatter(comparison_df):
     """Create risk-return scatter plot"""
@@ -270,7 +477,7 @@ def create_risk_return_scatter(comparison_df):
             'Sharpe_Ratio': ':.3f',
             'Type': False
         },
-        color_discrete_map={'ML Strategy': '#1f77b4', 'Benchmark': '#ff7f0e'},
+        color_discrete_map={'ML Strategy': SECONDARY_ACCENT, 'Benchmark': '#f59e0b'},
         labels={
             'Volatility': 'Volatility (Risk)',
             'Annual_Return': 'Annual Return'
@@ -278,14 +485,9 @@ def create_risk_return_scatter(comparison_df):
         title='Risk-Return Profile: ML Strategies vs Benchmarks'
     )
     
-    fig.update_traces(marker=dict(line=dict(width=2, color='DarkSlateGray')))
-    fig.update_layout(
-        template='plotly_white',
-        height=500,
-        showlegend=True
-    )
-    
-    return fig
+    fig.update_traces(marker=dict(line=dict(width=1.3, color='rgba(15, 23, 42, 0.42)')))
+    fig.update_layout(height=500, showlegend=True)
+    return style_figure(fig, height=500)
 
 def create_weights_chart(weights_series, strategy_name):
     """Create portfolio weights visualization"""
@@ -300,7 +502,7 @@ def create_weights_chart(weights_series, strategy_name):
                 orientation='h',
                 marker=dict(
                     color=weights_top.values,
-                    colorscale='Viridis',
+                    colorscale='Teal',
                     showscale=True,
                     colorbar=dict(title="Weight %")
                 ),
@@ -313,11 +515,10 @@ def create_weights_chart(weights_series, strategy_name):
             title=f'Top 10 Holdings - {strategy_name.replace("_", " ").title()}',
             xaxis_title='Weight (%)',
             yaxis_title='Stock Symbol',
-            template='plotly_white',
             height=400
         )
-        
-        return fig
+
+        return style_figure(fig, height=400)
     except Exception as e:
         # Return empty figure with error message
         fig = go.Figure()
@@ -335,16 +536,12 @@ def create_cluster_visualization(clusters_df, cluster_analysis_df):
         color='cluster',
         title='Stock Clustering Results',
         labels={'cluster': 'Cluster ID', 'symbol': 'Stock Symbol'},
-        color_continuous_scale='viridis',
+        color_continuous_scale='Tealgrn',
         height=500
     )
-    
-    fig.update_layout(
-        template='plotly_white',
-        showlegend=False
-    )
-    
-    return fig
+
+    fig.update_layout(showlegend=False)
+    return style_figure(fig, height=500)
 
 def create_drawdown_chart(returns):
     """Create drawdown chart"""
@@ -359,26 +556,25 @@ def create_drawdown_chart(returns):
         y=drawdown.values * 100,
         fill='tozeroy',
         name='Drawdown',
-        line=dict(color='red', width=1),
-        fillcolor='rgba(255, 0, 0, 0.2)'
+        line=dict(color='#dc2626', width=1.3),
+        fillcolor='rgba(220, 38, 38, 0.22)'
     ))
     
     fig.update_layout(
         title='Portfolio Drawdown Over Time',
         xaxis_title='Date',
         yaxis_title='Drawdown (%)',
-        template='plotly_white',
         height=400,
         hovermode='x unified'
     )
-    
-    return fig
+
+    return style_figure(fig, height=400)
 
 def create_metrics_comparison(comparison_df, metric):
     """Create horizontal bar chart for metric comparison"""
     sorted_df = comparison_df.sort_values(metric, ascending=True)
     
-    colors = ['#1f77b4' if s.startswith('ML_') else '#ff7f0e' for s in sorted_df['Strategy']]
+    colors = [SECONDARY_ACCENT if s.startswith('ML_') else '#f59e0b' for s in sorted_df['Strategy']]
     
     fig = go.Figure(data=[
         go.Bar(
@@ -395,11 +591,10 @@ def create_metrics_comparison(comparison_df, metric):
         title=f'{metric.replace("_", " ").title()} Comparison',
         xaxis_title=metric.replace('_', ' ').title(),
         yaxis_title='Strategy',
-        template='plotly_white',
         height=500
     )
-    
-    return fig
+
+    return style_figure(fig, height=500)
 
 def main():
     """Main dashboard function"""
@@ -454,8 +649,11 @@ def main():
     # 🏠 OVERVIEW PAGE
     # ============================================
     if page == "🏠 Overview":
-        st.title(f"🏠 Portfolio Optimization Dashboard - {market} Market")
-        st.markdown("### ML-Enhanced Investment Strategy Analysis")
+        render_page_header(
+            f"Portfolio Optimization Dashboard · {market} Market",
+            "Executive view of strategy performance, risk profile, and benchmark positioning.",
+            f"Benchmark: {data.get('benchmark_name', 'N/A')}"
+        )
         
         # Key Metrics Row
         if 'benchmark_comparison' in data:
@@ -534,7 +732,11 @@ def main():
     # 📈 PERFORMANCE ANALYSIS PAGE
     # ============================================
     elif page == "📈 Performance Analysis":
-        st.title("📈 Performance Analysis")
+        render_page_header(
+            "Performance Analysis",
+            "Deep dive into return behavior, drawdowns, and rolling risk-adjusted metrics.",
+            f"Market: {market}"
+        )
         
         # Strategy selector
         strategy = st.selectbox(
@@ -590,10 +792,9 @@ def main():
                     title='Cumulative Returns',
                     xaxis_title='Date',
                     yaxis_title='Cumulative Return',
-                    template='plotly_white',
                     height=400
                 )
-                st.plotly_chart(fig, width='stretch')
+                st.plotly_chart(style_figure(fig, height=400), width='stretch')
             
             with col2:
                 # Drawdown
@@ -612,10 +813,9 @@ def main():
                 title='Distribution of Daily Returns',
                 xaxis_title='Daily Return (%)',
                 yaxis_title='Frequency',
-                template='plotly_white',
                 height=400
             )
-            st.plotly_chart(fig, width='stretch')
+            st.plotly_chart(style_figure(fig, height=400), width='stretch')
             
             # Rolling metrics
             st.markdown("### Rolling Performance Metrics")
@@ -644,14 +844,18 @@ def main():
             fig.update_yaxes(title_text="Sharpe Ratio", row=1, col=1)
             fig.update_yaxes(title_text="Volatility (%)", row=2, col=1)
             
-            fig.update_layout(height=600, template='plotly_white', showlegend=False)
-            st.plotly_chart(fig, width='stretch')
+            fig.update_layout(height=600, showlegend=False)
+            st.plotly_chart(style_figure(fig, height=600), width='stretch')
     
     # ============================================
     # 💼 PORTFOLIO COMPOSITION PAGE
     # ============================================
     elif page == "💼 Portfolio Composition":
-        st.title("💼 Portfolio Composition")
+        render_page_header(
+            "Portfolio Composition",
+            "Inspect exposures, concentration levels, and allocation quality.",
+            f"Market: {market}"
+        )
         
         strategy = st.selectbox(
             "Select Strategy",
@@ -689,8 +893,8 @@ def main():
                         hole=0.4
                     )
                     fig.update_traces(textposition='inside', textinfo='percent+label')
-                    fig.update_layout(template='plotly_white', height=400)
-                    st.plotly_chart(fig, width='stretch')
+                    fig.update_layout(height=400)
+                    st.plotly_chart(style_figure(fig, height=400), width='stretch')
                 except Exception as e:
                     st.error(f"Error creating pie chart: {e}")
             
@@ -743,7 +947,11 @@ def main():
     # 🎯 CLUSTERING ANALYSIS PAGE
     # ============================================
     elif page == "🎯 Clustering Analysis":
-        st.title("🎯 Stock Clustering Analysis")
+        render_page_header(
+            "Stock Clustering Analysis",
+            "Explore cluster quality, stock grouping patterns, and risk-return segmentation.",
+            f"Market: {market}"
+        )
         
         if 'clusters' in data and 'cluster_analysis' in data:
             st.markdown("### Cluster Summary")
@@ -790,10 +998,10 @@ def main():
                     labels={'x': 'Cluster ID', 'y': 'Number of Stocks'},
                     title='Stocks per Cluster',
                     color=cluster_counts.values,
-                    color_continuous_scale='viridis'
+                    color_continuous_scale='Tealgrn'
                 )
-                fig.update_layout(template='plotly_white', height=400)
-                st.plotly_chart(fig, width='stretch')
+                fig.update_layout(height=400)
+                st.plotly_chart(style_figure(fig, height=400), width='stretch')
             
             with col2:
                 st.markdown("### Cluster Risk-Return Profile")
@@ -812,8 +1020,8 @@ def main():
                         },
                         title='Cluster Risk-Return Profile'
                     )
-                    fig.update_layout(template='plotly_white', height=400)
-                    st.plotly_chart(fig, width='stretch')
+                    fig.update_layout(height=400)
+                    st.plotly_chart(style_figure(fig, height=400), width='stretch')
             
             # Stocks by cluster
             st.markdown("### Stocks by Cluster")
@@ -832,7 +1040,11 @@ def main():
     # ⚖️ RISK ANALYSIS PAGE
     # ============================================
     elif page == "⚖️ Risk Analysis":
-        st.title("⚖️ Risk Analysis")
+        render_page_header(
+            "Risk Analysis",
+            "Compare downside, volatility, and risk-adjusted outcomes across strategies.",
+            f"Market: {market}"
+        )
         
         if 'benchmark_comparison' not in data:
             st.warning("⚠️ Risk analysis data not available. Please run the optimization pipeline first.")
@@ -895,7 +1107,11 @@ def main():
     # 🏆 BENCHMARK COMPARISON PAGE
     # ============================================
     elif page == "🏆 Benchmark Comparison":
-        st.title("🏆 Benchmark Comparison")
+        render_page_header(
+            "Benchmark Comparison",
+            "Evaluate alpha, wealth outcomes, and benchmark-relative consistency.",
+            f"Market: {market}"
+        )
 
         if 'benchmark_comparison' not in data:
             st.warning("⚠️ Benchmark comparison data not found.")
@@ -981,7 +1197,7 @@ def main():
                     <div style="background:{verdict_color}22; border-left:6px solid {verdict_color};
                                 padding:20px 24px; border-radius:8px; margin-bottom:16px;">
                         <h2 style="color:{verdict_color}; margin:0 0 6px 0;">{verdict_icon} {verdict_text}</h2>
-                        <p style="font-size:15px; margin:0; color:#ddd;">{verdict_sub}</p>
+                        <p style="font-size:15px; margin:0; color:{TEXT_MUTED};">{verdict_sub}</p>
                     </div>
                     """,
                     unsafe_allow_html=True,
@@ -1043,7 +1259,7 @@ def main():
                     y=wealth_df['Strategy'],
                     orientation='h',
                     marker=dict(
-                        color=wealth_df['Type'].map({'ML Strategy': '#2196F3', 'Benchmark': '#FF9800'}),
+                        color=wealth_df['Type'].map({'ML Strategy': SECONDARY_ACCENT, 'Benchmark': '#f59e0b'}),
                     ),
                     text=[f"${v:.2f}" for v in wealth_df['Final Value']],
                     textposition='auto',
@@ -1053,10 +1269,10 @@ def main():
                 fig_wealth.update_layout(
                     title='Final portfolio value for every $1 invested (blue = ML, orange = Benchmark)',
                     xaxis_title='Portfolio Value ($)',
-                    template='plotly_white', height=420,
+                    height=420,
                     showlegend=False,
                 )
-                st.plotly_chart(fig_wealth, width='stretch')
+                st.plotly_chart(style_figure(fig_wealth, height=420), width='stretch')
 
                 # ── Alpha table ───────────────────────────────────────────
                 with st.expander("📋 Full Alpha Table — ML vs Every Benchmark", expanded=False):
@@ -1113,7 +1329,7 @@ def main():
             st.markdown("### 📊 Strategy Comparison")
             plot_df = comparison_df.copy()
             plot_df['Label'] = plot_df['Strategy'].str.replace('ML_', '').str.replace('_', ' ').str.title()
-            plot_df['Color'] = plot_df['Strategy'].apply(lambda s: '#2196F3' if s.startswith('ML_') else '#FF9800')
+            plot_df['Color'] = plot_df['Strategy'].apply(lambda s: SECONDARY_ACCENT if s.startswith('ML_') else '#f59e0b')
 
             col1, col2 = st.columns(2)
             with col1:
@@ -1128,8 +1344,8 @@ def main():
                 ))
                 fig_ret.update_layout(title='Annual Return (blue=ML, orange=Benchmark)',
                                       xaxis_title='Annual Return (%)',
-                                      template='plotly_white', height=420)
-                st.plotly_chart(fig_ret, width='stretch')
+                                      height=420)
+                st.plotly_chart(style_figure(fig_ret, height=420), width='stretch')
 
             with col2:
                 sorted_sr = plot_df.sort_values('Sharpe_Ratio', ascending=True)
@@ -1143,8 +1359,8 @@ def main():
                 ))
                 fig_sr.update_layout(title='Sharpe Ratio (blue=ML, orange=Benchmark)',
                                      xaxis_title='Sharpe Ratio',
-                                     template='plotly_white', height=420)
-                st.plotly_chart(fig_sr, width='stretch')
+                                     height=420)
+                st.plotly_chart(style_figure(fig_sr, height=420), width='stretch')
 
             # ═══════════════════════════════════════════════════════════════
             # SECTION 4 — RISK-RETURN SCATTER
@@ -1178,7 +1394,7 @@ def main():
     st.sidebar.markdown(
         """
         <div style='text-align: center'>
-            <p style='font-size: 12px; color: #666;'>
+            <p style='font-size: 12px; color: #94a3b8;'>
                 Portfolio Optimizer v1.0<br>
                 ML-Enhanced Investment Analysis<br>
                 © 2026
