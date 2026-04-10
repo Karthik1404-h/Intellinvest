@@ -224,39 +224,43 @@ class DataPreprocessor:
             try:
                 symbol_data = data[symbol].copy()
                 
-                # Simple Moving Averages
-                symbol_data['SMA_10'] = symbol_data['Close'].rolling(window=10).mean()
-                symbol_data['SMA_20'] = symbol_data['Close'].rolling(window=20).mean()
-                symbol_data['SMA_50'] = symbol_data['Close'].rolling(window=50).mean()
-                
-                # Exponential Moving Averages
-                symbol_data['EMA_10'] = symbol_data['Close'].ewm(span=10).mean()
-                symbol_data['EMA_20'] = symbol_data['Close'].ewm(span=20).mean()
-                
-                # RSI
-                symbol_data['RSI'] = ta.rsi(symbol_data['Close'], length=14)
-                
-                # MACD
-                macd_data = ta.macd(symbol_data['Close'])
-                symbol_data = pd.concat([symbol_data, macd_data], axis=1)
-                
-                # Bollinger Bands
-                bb_data = ta.bbands(symbol_data['Close'], length=20)
-                symbol_data = pd.concat([symbol_data, bb_data], axis=1)
+                # Ensure index is datetime
+                symbol_data.index = pd.to_datetime(symbol_data.index)
+
+                # Create a new DataFrame for indicators to avoid index alignment issues
+                indicator_df = pd.DataFrame(index=symbol_data.index)
+
+                # Use the ta extension for cleaner syntax
+                symbol_data.ta.ema(length=10, append=True)
+                symbol_data.ta.ema(length=20, append=True)
+                symbol_data.ta.sma(length=10, append=True)
+                symbol_data.ta.sma(length=20, append=True)
+                symbol_data.ta.sma(length=50, append=True)
+                symbol_data.ta.rsi(length=14, append=True)
+                symbol_data.ta.macd(append=True)
+                symbol_data.ta.bbands(append=True)
                 
                 # Volume indicators
-                symbol_data['Volume_SMA'] = symbol_data['Volume'].rolling(window=20).mean()
-                symbol_data['Volume_Ratio'] = symbol_data['Volume'] / symbol_data['Volume_SMA']
-                
-                enhanced_data[symbol] = symbol_data
-                
+                vol_sma = symbol_data.ta.sma(close=symbol_data['Volume'], length=20, append=False)
+                if vol_sma is not None:
+                    symbol_data['Volume_SMA'] = vol_sma
+                    symbol_data['Volume_Ratio'] = symbol_data['Volume'] / vol_sma
+
+                # This is a critical change to prevent the "Columns must be same length as key" error
+                for col in symbol_data.columns:
+                    if col not in ['Open', 'High', 'Low', 'Close', 'Adj Close', 'Volume']:
+                         enhanced_data.loc[:, (symbol, col)] = symbol_data[col]
+
             except Exception as e:
                 logger.warning(f"Error adding technical indicators for {symbol}: {e}")
                 continue
         
+        # Clean up columns that might be all NaN if indicators failed
+        enhanced_data.dropna(axis=1, how='all', inplace=True)
+        
         return enhanced_data
 
-def main():
+def main(market: str = 'US'):
     """Main function to collect and preprocess data"""
     logger.info("Starting data collection and preprocessing")
     

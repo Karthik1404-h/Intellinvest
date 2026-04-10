@@ -414,16 +414,17 @@ def load_data(market: str = 'US'):
         if os.path.exists(cluster_analysis_path):
             data['cluster_analysis'] = pd.read_csv(cluster_analysis_path)
         
-        # Load benchmark comparison
+        # Load benchmark comparison and force-sync with the freshest ML metrics
         benchmark_path = os.path.join(results_dir, 'benchmark_comparison_detailed.csv')
+        benchmark_df = pd.DataFrame()
         if os.path.exists(benchmark_path):
-            data['benchmark_comparison'] = pd.read_csv(benchmark_path)
+            benchmark_df = pd.read_csv(benchmark_path)
         
-        # Fallback: build benchmark_comparison from performance_metrics JSONs if file not found
-        if 'benchmark_comparison' not in data and data.get('performance_metrics'):
-            rows = []
+        # 1. Always build the ML strategy rows from the freshest JSON files
+        fresh_rows = []
+        if data.get('performance_metrics'):
             for strategy, metrics in data['performance_metrics'].items():
-                rows.append({
+                fresh_rows.append({
                     'Strategy': f'ML_{strategy}',
                     'Total_Return': metrics.get('total_return', 0),
                     'Annual_Return': metrics.get('annualized_return', 0),
@@ -433,8 +434,15 @@ def load_data(market: str = 'US'):
                     'Max_Drawdown': metrics.get('max_drawdown', 0),
                     'Calmar_Ratio': metrics.get('calmar_ratio', 0),
                 })
-            if rows:
-                data['benchmark_comparison'] = pd.DataFrame(rows)
+        
+        # 2. Extract ONLY the passive benchmarks from the CSV (if it exists)
+        if not benchmark_df.empty:
+            passive_benchmarks = benchmark_df[~benchmark_df['Strategy'].str.startswith('ML_')]
+            # Combine the fresh ML data with the static passive benchmarks
+            data['benchmark_comparison'] = pd.concat([pd.DataFrame(fresh_rows), passive_benchmarks], ignore_index=True)
+        elif fresh_rows:
+            # Fallback if no benchmark CSV exists at all
+            data['benchmark_comparison'] = pd.DataFrame(fresh_rows)
         
         # Load strategy comparison
         strategy_comparison_path = os.path.join(results_dir, 'strategy_comparison_summary.csv')
@@ -1341,7 +1349,9 @@ def main():
                 st.markdown("---")
 
                 # ── Cumulative wealth bar ─────────────────────────────────
-                st.markdown("### ▮ Cumulative Wealth: $1 Invested")
+                currency_sym = "$" if market == 'US' else "₹"
+                st.markdown(f"### ▮ Cumulative Wealth: {currency_sym}1 Invested")
+                
                 wealth_rows = []
                 for _, row in comparison_df.iterrows():
                     is_ml = row['Strategy'].startswith('ML_')
@@ -1352,6 +1362,7 @@ def main():
                         'Type': 'ML Strategy' if is_ml else 'Benchmark',
                     })
                 wealth_df = pd.DataFrame(wealth_rows).sort_values('Final Value', ascending=True)
+                
                 fig_wealth = go.Figure(go.Bar(
                     x=wealth_df['Final Value'],
                     y=wealth_df['Strategy'],
@@ -1359,14 +1370,16 @@ def main():
                     marker=dict(
                         color=wealth_df['Type'].map({'ML Strategy': SECONDARY_ACCENT, 'Benchmark': '#f59e0b'}),
                     ),
-                    text=[f"${v:.2f}" for v in wealth_df['Final Value']],
+                    text=[f"{currency_sym}{v:.2f}" for v in wealth_df['Final Value']],
                     textposition='auto',
                 ))
+                
                 fig_wealth.add_vline(x=1.0, line_dash='dash', line_color='red',
-                                     annotation_text='Break-even ($1)', annotation_position='top right')
+                                     annotation_text=f'Break-even ({currency_sym}1)', annotation_position='top right')
+                
                 fig_wealth.update_layout(
-                    title='Final portfolio value for every $1 invested (blue = ML, orange = Benchmark)',
-                    xaxis_title='Portfolio Value ($)',
+                    title=f'Final portfolio value for every {currency_sym}1 invested (blue = ML, orange = Benchmark)',
+                    xaxis_title=f'Portfolio Value ({currency_sym})',
                     height=420,
                     showlegend=False,
                 )

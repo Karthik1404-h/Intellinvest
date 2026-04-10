@@ -25,68 +25,184 @@ from datetime import datetime
 
 from config import Config
 
+# Import prediction models
+from src.models.prediction_models import FeatureGenerator
+
 class ReturnForecaster:
     """Uses trained ML/DL models to forecast returns"""
     
-    def __init__(self):
+    def __init__(self, market: str):
         self.config = Config()
-        self.ml_models = {}
-        self.dl_models = {}
+        self.market = market.upper()
+        self.models = {}
         self.scalers = {}
-    
-    def load_trained_models(self, models_dir: str) -> bool:
-        """Load previously trained models"""
+        self.feature_columns = None
+        self.feature_generator = FeatureGenerator()
+        self.cluster_assignments = None
+        self._load_all_models()
+        self._load_cluster_assignments()
+
+    def _load_all_models(self):
+        """Load all trained ML and DL models for the specified market."""
+        import os
+        import pickle
+        import sys
+        
+        # Force absolute pathing to prevent directory mismatch errors
+        base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+        models_dir = os.path.join(base_dir, 'models', self.market.lower())
+        
+        logger.info(f"Looking for ML models in EXACT path: {models_dir}")
+        
+        if not os.path.exists(models_dir):
+            logger.error(f"Models directory DOES NOT EXIST: {models_dir}")
+            return
+            
         try:
-            import pickle
-            import tensorflow as tf
-            
-            # Load ML models
-            for model_file in os.listdir(models_dir):
-                if model_file.startswith('ml_model_') and model_file.endswith('.pkl'):
-                    model_name = model_file.replace('ml_model_', '').replace('.pkl', '')
-                    with open(os.path.join(models_dir, model_file), 'rb') as f:
-                        self.ml_models[model_name] = pickle.load(f)
+            ml_models_path = os.path.join(models_dir, 'cluster_ml_models.pkl')
+            if os.path.exists(ml_models_path):
+                with open(ml_models_path, 'rb') as f:
+                    self.models.update(pickle.load(f))
+                logger.info("Successfully loaded ML models from pickle.")
+            else:
+                logger.warning(f"Pickle file not found at: {ml_models_path}")
                 
-                # Load DL models
-                elif model_file.startswith('dl_model_') and model_file.endswith('.h5'):
-                    model_name = model_file.replace('dl_model_', '').replace('.h5', '')
-                    self.dl_models[model_name] = tf.keras.models.load_model(
-                        os.path.join(models_dir, model_file)
-                    )
-            
-            logger.info(f"Loaded {len(self.ml_models)} ML models and {len(self.dl_models)} DL models")
-            return True
-            
+            scalers_path = os.path.join(models_dir, 'cluster_ml_scalers.pkl')
+            if os.path.exists(scalers_path):
+                with open(scalers_path, 'rb') as f:
+                    self.scalers = pickle.load(f)
+                    
         except Exception as e:
-            logger.error(f"Error loading models: {e}")
-            return False
-    
+            logger.error(f"CRITICAL ERROR loading models: {str(e)}")
+
+    def _load_cluster_assignments(self, algorithm: str = 'kmeans'):
+        """Load the cluster assignments for the market."""
+        results_dir = self.config.get_market_results_dir(self.market)
+        assignments_path = os.path.join(results_dir, f'cluster_assignments_{algorithm}.csv')
+        
+        if os.path.exists(assignments_path):
+            self.cluster_assignments = pd.read_csv(assignments_path).set_index('symbol')['cluster']
+            logger.info(f"Loaded cluster assignments for {len(self.cluster_assignments)} symbols.")
+        else:
+            logger.warning(f"Cluster assignments not found at {assignments_path}. Predictions will not be cluster-aware.")
+
     def forecast_returns(self, 
-                        recent_data: pd.DataFrame,
+                        price_data: pd.DataFrame,
+                        returns_data: pd.DataFrame,
                         horizon: int = 1,
-                        method: str = 'ensemble') -> pd.Series:
+                        method: str = 'cluster_cnn') -> pd.Series:
         """
-        Forecast stock returns using trained models
+        Forecast stock returns using trained cluster-based models.
         
         Args:
-            recent_data: Recent price/return data for prediction
-            horizon: Forecast horizon in days
-            method: 'ensemble', 'ml_only', 'dl_only', or specific model name
+            price_data: Historical price data for feature generation.
+            returns_data: Historical returns data.
+            horizon: Forecast horizon (currently supports 1-day).
+            method: The model to use, e.g., 'cluster_cnn_target_1d'.
             
         Returns:
-            Series with predicted returns for each stock
+            Series with predicted returns for each stock.
         """
         logger.info(f"Forecasting returns for {horizon} day(s) using {method}")
         
-        if method == 'naive':
-            # Simple historical mean as baseline
-            return self._naive_forecast(recent_data, horizon)
-        elif method == 'ensemble':
-            return self._ensemble_forecast(recent_data, horizon)
-        else:
-            # Use specific model or method
-            return self._model_forecast(recent_data, horizon, method)
-    
+        if self.cluster_assignments is None:
+            logger.error("Cannot forecast: Cluster assignments not loaded.")
+            return self._naive_forecast(returns_data, horizon)
+
+        if not self.models:
+            logger.error("Cannot forecast: No models loaded.")
+            return self._naive_forecast(returns_data, horizon)
+            
+        logger.info(f"Available models in memory: {list(self.models.keys())}")
+
+        # 1. Generate the latest features for all stocks
+        # We need to create features for a single time step (the most recent one)
+        latest_features = self._generate_latest_features(price_data, returns_data)
+        
+        if latest_features.empty:
+            logger.error("Could not generate latest features. Falling back to naive forecast.")
+            return self._naive_forecast(returns_data, horizon)
+
+        # 2. Predict return for each stock using its cluster's model
+        predictions = {}
+        for symbol, features in latest_features.iterrows():
+            try:
+                cluster_id = self.cluster_assignments.get(symbol)
+                if cluster_id is None:
+                    continue
+
+                model_key_base = method.replace('_target_1d', '') # e.g., 'cluster_random_forest'
+                model_key = f"{model_key_base}_cluster_{cluster_id}"
+                
+                # Let's try a more robust key matching
+                potential_keys = [
+                    f"cluster_{cluster_id}_{model_key_base}_{horizon}d",
+                    f"cluster_{cluster_id}_{model_key_base}_target_{horizon}d",
+                    f"{model_key_base}_cluster_{cluster_id}_target_{horizon}d",
+                ]
+                
+                model = None
+                for key in potential_keys:
+                    if key in self.models:
+                        model = self.models[key]
+                        model_key = key
+                        break
+                
+                scaler_key = f"cluster_{cluster_id}_target_{horizon}d"
+                scaler = self.scalers.get(scaler_key)
+
+                if model is None:
+                    # logger.warning(f"No model found for cluster {cluster_id} with base '{model_key_base}'")
+                    continue
+                if scaler is None:
+                    # logger.warning(f"No scaler found for cluster {cluster_id} with key '{scaler_key}'")
+                    continue
+
+                # Prepare features for prediction (scale and reshape)
+                feature_values = features.values.reshape(1, -1)
+                scaled_features = scaler.transform(feature_values)
+                
+                # DL models need sequence input, ML models need flat input
+                if 'cnn' in method or 'lstm' in method:
+                    # For single prediction, we need to construct a sequence from historical data
+                    # This part is complex and requires sequence generation for the last step
+                    # For now, we'll use a simplified approach with ML models
+                    pass # Fallback to ML for now
+                
+                # Using ML models (RandomForest, XGBoost)
+                prediction = model.predict(scaled_features)[0]
+                predictions[symbol] = prediction
+
+            except Exception as e:
+                logger.error(f"Error predicting for {symbol}: {e}")
+                predictions[symbol] = 0 # Default to zero on error
+
+        if not predictions:
+            logger.error("No predictions were made. Falling back to naive forecast.")
+            return self._naive_forecast(returns_data, horizon)
+
+        return pd.Series(predictions)
+
+    def _generate_latest_features(self, price_data: pd.DataFrame, returns_data: pd.DataFrame) -> pd.DataFrame:
+        """Generates the most recent feature set for all symbols."""
+        
+        # This is a simplified version. A robust implementation would use the FeatureGenerator
+        # and extract the last row for each symbol.
+        logger.info("Generating latest features for all symbols...")
+        full_features = self.feature_generator.create_ml_features(price_data, returns_data, self.cluster_assignments.reset_index())
+        
+        if full_features.empty:
+            return pd.DataFrame()
+            
+        # Get the last valid feature row for each symbol
+        latest_features = full_features.loc[full_features.groupby('symbol')['date'].idxmax()]
+        
+        # Ensure feature columns match what models were trained on
+        if self.feature_columns:
+             latest_features = latest_features[self.feature_columns]
+
+        return latest_features.set_index('symbol')
+
     def _naive_forecast(self, data: pd.DataFrame, horizon: int) ->pd.Series:
         """Naive forecast using historical mean returns"""
         symbols = data.columns.get_level_values(0).unique()
@@ -157,12 +273,14 @@ class ReturnForecaster:
 class PortfolioOptimizer:
     """Main portfolio optimization class"""
     
-    def __init__(self):
+    def __init__(self, market: str):
         self.config = Config()
-        self.forecaster = ReturnForecaster()
+        self.market = market
+        self.forecaster = ReturnForecaster(market=self.market)
     
     def optimize_portfolio(self,
                           price_data: pd.DataFrame,
+                          returns_data: pd.DataFrame, # Added returns_data
                           expected_returns: Optional[pd.Series] = None,
                           method: str = 'mean_variance',
                           constraints: Optional[Dict] = None,
@@ -172,6 +290,7 @@ class PortfolioOptimizer:
         
         Args:
             price_data: Historical price data
+            returns_data: Historical returns data
             expected_returns: Expected returns (if None, will be forecasted)
             method: Optimization method
             constraints: Additional constraints
@@ -186,18 +305,29 @@ class PortfolioOptimizer:
         symbols = self._get_valid_symbols(price_data)
         clean_prices = self._clean_prices_for_optimization(price_data, symbols)
         
-        # Calculate returns
-        returns_data = clean_prices.pct_change().dropna()
+        # Calculate historical returns for covariance
+        historical_returns = clean_prices.pct_change().dropna()
         
-        # Get expected returns
-        if expected_returns is None:
-            expected_returns = self.forecaster.forecast_returns(price_data)
-            # Align with available symbols
-            expected_returns = expected_returns.reindex(symbols).fillna(0.08/252)  # Default daily return
+        # Get expected returns ONLY if the method requires them
+        methods_requiring_forecasts = ['mean_variance', 'max_sharpe', 'cluster_based']
         
-        # Calculate covariance matrix
-        cov_matrix = returns_data.cov()
+        if expected_returns is None and method in methods_requiring_forecasts:
+            forecast_method = 'cluster_random_forest_target_1d'
+            expected_returns = self.forecaster.forecast_returns(price_data, returns_data, method=forecast_method)
+            # Align with available symbols and fill missing with historical mean
+            expected_returns = expected_returns.reindex(symbols).fillna(historical_returns.mean())
+        elif expected_returns is None:
+            # For Risk Parity, Min Variance, etc., we don't need ML forecasts
+            expected_returns = historical_returns.mean().reindex(symbols)
         
+        # Calculate covariance matrix from historical returns
+        cov_matrix = historical_returns.cov()
+        
+        # Align all inputs
+        valid_symbols = list(set(expected_returns.index) & set(cov_matrix.index))
+        expected_returns = expected_returns.loc[valid_symbols]
+        cov_matrix = cov_matrix.loc[valid_symbols, valid_symbols]
+
         # Apply optimization method
         if method == 'mean_variance':
             result = self._mean_variance_optimization(expected_returns, cov_matrix, constraints)
@@ -216,7 +346,7 @@ class PortfolioOptimizer:
         
         # Add metadata
         result['method'] = method
-        result['symbols'] = symbols
+        result['symbols'] = valid_symbols
         result['optimization_date'] = datetime.now().isoformat()
         result['expected_returns'] = expected_returns
         result['covariance_matrix'] = cov_matrix
@@ -260,6 +390,10 @@ class PortfolioOptimizer:
         """Modern Portfolio Theory optimization"""
         n_assets = len(expected_returns)
         
+        if n_assets == 0:
+            logger.warning("No assets to optimize.")
+            return {'weights': pd.Series(), 'optimization_status': 'failed'}
+
         # Decision variables
         weights = cp.Variable(n_assets)
         
@@ -282,11 +416,12 @@ class PortfolioOptimizer:
         
         # Solve optimization problem
         problem = cp.Problem(objective, constraint_list)
-        problem.solve()
+        problem.solve(solver=cp.SCS) # Specify solver for robustness
         
         if weights.value is None:
-            logger.error("Optimization failed")
-            return {'weights': pd.Series(index=expected_returns.index, data=0)}
+            logger.error("Mean-variance optimization failed. Trying fallback (equal weights).")
+            equal_weights = pd.Series(index=expected_returns.index, data=1/n_assets)
+            return {'weights': equal_weights, 'optimization_status': 'failed_fallback'}
         
         optimal_weights = pd.Series(index=expected_returns.index, data=weights.value)
         
@@ -308,6 +443,10 @@ class PortfolioOptimizer:
                                 constraints: Optional[Dict] = None) -> Dict[str, Any]:
         """Risk parity optimization"""
         n_assets = len(cov_matrix)
+
+        if n_assets == 0:
+            logger.warning("No assets for risk parity.")
+            return {'weights': pd.Series(), 'optimization_status': 'failed'}
         
         def risk_parity_objective(weights):
             """Objective function for risk parity"""
@@ -348,6 +487,11 @@ class PortfolioOptimizer:
             constraints=constraints_list,
             options={'ftol': 1e-9, 'maxiter': 1000}
         )
+
+        if not result.success:
+            logger.warning(f"Risk parity optimization failed: {result.message}. Falling back to equal weights.")
+            equal_weights = pd.Series(index=cov_matrix.index, data=1/n_assets)
+            return {'weights': equal_weights, 'optimization_status': 'failed_fallback'}
         
         optimal_weights = pd.Series(index=cov_matrix.index, data=result.x)
         
@@ -377,7 +521,7 @@ class PortfolioOptimizer:
             optimal_weights = pd.Series(weights)
             
             # Calculate portfolio metrics
-            cov_matrix = returns_data.cov()
+            cov_matrix = risk_models.sample_cov(returns_data)
             portfolio_vol = np.sqrt(optimal_weights @ cov_matrix @ optimal_weights) * np.sqrt(252)
             
             return {
@@ -390,13 +534,17 @@ class PortfolioOptimizer:
             logger.error(f"HRP optimization failed: {e}")
             n_assets = len(returns_data.columns)
             equal_weights = pd.Series(index=returns_data.columns, data=1.0/n_assets)
-            return {'weights': equal_weights}
+            return {'weights': equal_weights, 'optimization_status': 'failed_fallback'}
     
     def _min_variance_optimization(self, 
                                  cov_matrix: pd.DataFrame,
                                  constraints: Optional[Dict] = None) -> Dict[str, Any]:
         """Minimum variance optimization using scipy"""
         n_assets = len(cov_matrix)
+
+        if n_assets == 0:
+            logger.warning("No assets for min variance.")
+            return {'weights': pd.Series(), 'optimization_status': 'failed'}
         
         # Objective: minimize portfolio variance
         def portfolio_variance(weights):
@@ -426,7 +574,9 @@ class PortfolioOptimizer:
         )
         
         if not result.success:
-            logger.warning(f"Min variance optimization warning: {result.message}")
+            logger.warning(f"Min variance optimization warning: {result.message}. Falling back to equal weights.")
+            equal_weights = pd.Series(index=cov_matrix.index, data=1/n_assets)
+            return {'weights': equal_weights, 'optimization_status': 'failed_fallback'}
         
         optimal_weights = pd.Series(index=cov_matrix.index, data=result.x)
         portfolio_vol = np.sqrt(result.fun) * np.sqrt(252)
@@ -443,6 +593,10 @@ class PortfolioOptimizer:
                                constraints: Optional[Dict] = None) -> Dict[str, Any]:
         """Maximum Sharpe ratio optimization using scipy"""
         n_assets = len(expected_returns)
+
+        if n_assets == 0:
+            logger.warning("No assets for max sharpe.")
+            return {'weights': pd.Series(), 'optimization_status': 'failed'}
         
         # Objective: maximize Sharpe ratio (minimize negative Sharpe)
         def negative_sharpe(weights):
@@ -477,7 +631,9 @@ class PortfolioOptimizer:
         )
         
         if not result.success:
-            logger.warning(f"Max Sharpe optimization warning: {result.message}")
+            logger.warning(f"Max Sharpe optimization warning: {result.message}. Falling back to equal weights.")
+            equal_weights = pd.Series(index=expected_returns.index, data=1/n_assets)
+            return {'weights': equal_weights, 'optimization_status': 'failed_fallback'}
         
         optimal_weights = pd.Series(index=expected_returns.index, data=result.x)
         
@@ -499,66 +655,91 @@ class PortfolioOptimizer:
                                   cov_matrix: pd.DataFrame,
                                   cluster_data: Optional[pd.DataFrame],
                                   constraints: Optional[Dict] = None) -> Dict[str, Any]:
-        """Cluster-based optimization with diversification constraints"""
-        if cluster_data is None:
-            logger.warning("No cluster data provided, using standard mean-variance")
-            return self._mean_variance_optimization(expected_returns, cov_matrix, constraints)
+        """
+        Robust Cluster-based Optimization combining ML forecasts with
+        Tikhonov Regularized Mean-Variance (MVF) and Positivity Filtering.
+        """
+        import cvxpy as cp
         
-        # Create cluster mapping
-        cluster_map = {}
-        for _, row in cluster_data.iterrows():
-            if row['symbol'] in expected_returns.index:
-                cluster_map[row['symbol']] = row['cluster']
+        # 1. Filter out assets with negative predicted returns
+        positive_returns_mask = expected_returns > 0
+        valid_assets = expected_returns[positive_returns_mask].index.tolist()
         
-        n_assets = len(expected_returns)
-        weights = cp.Variable(n_assets)
+        if len(valid_assets) == 0:
+            logger.warning("No assets with positive expected returns. Returning equal cash weights or zeros.")
+            return {
+                'weights': pd.Series(0.0, index=expected_returns.index),
+                'expected_return': 0.0,
+                'volatility': 0.0,
+                'sharpe_ratio': 0.0,
+                'optimization_status': 'no_positive_returns'
+            }
+            
+        # 2. Sub-select the covariance matrix to match exactly the positive assets
+        subset_returns = expected_returns.loc[valid_assets].values
+        subset_cov_matrix = cov_matrix.loc[valid_assets, valid_assets].values
         
-        # Objective: Maximize return - risk penalty
-        risk_aversion = constraints.get('risk_aversion', 1.0) if constraints else 1.0
-        portfolio_return = expected_returns.values @ weights
-        portfolio_risk = cp.quad_form(weights, cov_matrix.values)
+        n_filtered_assets = len(valid_assets)
         
-        objective = cp.Maximize(portfolio_return - risk_aversion * portfolio_risk)
+        # 3. Apply Tikhonov Regularization (L2 penalty) to the covariance matrix
+        # This guarantees it is positive definite and prevents ECOS crashes
+        tikhonov_penalty = 1e-8
+        reg_cov_matrix = subset_cov_matrix + np.eye(n_filtered_assets) * tikhonov_penalty
         
-        # Standard constraints
-        constraint_list = [cp.sum(weights) == 1]
+        # 4. Define CVXPY problem for the valid subset
+        w = cp.Variable(n_filtered_assets)
         
-        max_weight = constraints.get('max_weight', self.config.MAX_WEIGHT_PER_STOCK) if constraints else self.config.MAX_WEIGHT_PER_STOCK
-        constraint_list.append(weights >= 0)
-        constraint_list.append(weights <= max_weight)
+        # Maximize: w^T * mu - gamma * w^T * Cov * w
+        # Assuming typical risk aversion gamma = 1 for this context
+        gamma = 2.5
+        portfolio_return = subset_returns @ w
+        portfolio_variance = cp.quad_form(w, cp.psd_wrap(reg_cov_matrix))
         
-        # Cluster diversification constraints
-        max_cluster_weight = constraints.get('max_cluster_weight', 0.4) if constraints else 0.4
+        objective = cp.Maximize(portfolio_return - gamma * portfolio_variance)
         
-        clusters = set(cluster_map.values())
-        for cluster_id in clusters:
-            cluster_indices = [i for i, symbol in enumerate(expected_returns.index) 
-                             if cluster_map.get(symbol) == cluster_id]
-            if cluster_indices:
-                constraint_list.append(cp.sum(weights[cluster_indices]) <= max_cluster_weight)
+        # Constraints: Long only, fully invested, max weight 25% (or based on config)
+        max_weight = self.config.MAX_WEIGHT_PER_STOCK if hasattr(self.config, 'MAX_WEIGHT_PER_STOCK') else 0.25
+        cp_constraints = [
+            cp.sum(w) == 1,
+            w >= 0,
+            w <= max_weight
+        ]
         
-        # Solve
-        problem = cp.Problem(objective, constraint_list)
-        problem.solve()
+        prob = cp.Problem(objective, cp_constraints)
         
-        if weights.value is None:
-            logger.error("Cluster-based optimization failed, using mean-variance")
-            return self._mean_variance_optimization(expected_returns, cov_matrix, constraints)
+        # 5. Solve using the robust ECOS solver
+        try:
+            prob.solve(solver=cp.ECOS)
+        except Exception as e:
+            logger.error(f"ECOS solver failed in cluster optimization: {e}")
+            # Fallback to general solver if ECOS specifically fails
+            prob.solve()
+            
+        if prob.status not in ["optimal", "optimal_inaccurate"] or w.value is None:
+            logger.warning(f"CVXPY Cluster Optimization failed with status: {prob.status}")
+            # Fallback to equal weight on valid assets
+            safe_weights = np.ones(n_filtered_assets) / n_filtered_assets
+        else:
+            # Clean tiny negative numerical errors from solver
+            safe_weights = np.clip(w.value, 0, None)
+            safe_weights /= safe_weights.sum() # Re-normalize
+            
+        # 6. Reconstruct the full weight series (0 for discarded assets)
+        final_full_weights = pd.Series(0.0, index=expected_returns.index)
+        final_full_weights.loc[valid_assets] = safe_weights
         
-        optimal_weights = pd.Series(index=expected_returns.index, data=weights.value)
-        
-        # Calculate metrics
-        portfolio_return = (optimal_weights @ expected_returns) * 252
-        portfolio_vol = np.sqrt(optimal_weights @ cov_matrix @ optimal_weights) * np.sqrt(252)
-        sharpe_ratio = portfolio_return / portfolio_vol if portfolio_vol > 0 else 0
+        # 7. Calculate final portfolio metrics on the FULL universe geometry
+        # Note: (w @ R) and sqrt(w @ cov @ w)
+        port_ret = (final_full_weights @ expected_returns) * 252
+        port_vol = np.sqrt(final_full_weights @ cov_matrix.values @ final_full_weights) * np.sqrt(252)
+        sharpe = port_ret / port_vol if port_vol > 0 else 0.0
         
         return {
-            'weights': optimal_weights,
-            'expected_return': portfolio_return,
-            'volatility': portfolio_vol,
-            'sharpe_ratio': sharpe_ratio,
-            'cluster_allocation': self._calculate_cluster_allocation(optimal_weights, cluster_map),
-            'optimization_status': problem.status
+            'weights': final_full_weights,
+            'expected_return': port_ret,
+            'volatility': port_vol,
+            'sharpe_ratio': sharpe,
+            'optimization_status': prob.status
         }
     
     def _calculate_cluster_allocation(self, weights: pd.Series, cluster_map: Dict[str, int]) -> Dict[int, float]:
@@ -617,92 +798,133 @@ class PortfolioOptimizer:
             logger.error(f"Error generating efficient frontier: {e}")
             return np.array([]), np.array([]), []
 
-def main():
-    """Main function to run portfolio optimization"""
-    logger.info("Starting portfolio optimization")
-    
-    try:
-        # Load data
-        processed_data_path = os.path.join(Config.PROCESSED_DATA_DIR, 'processed_stock_data.csv')
-        cluster_data_path = os.path.join(Config.RESULTS_DIR, 'cluster_assignments_kmeans.csv')
-        
-        price_data = pd.read_csv(processed_data_path, index_col=0, header=[0, 1])
-        price_data.index = pd.to_datetime(price_data.index)
-        
-        cluster_data = None
-        if os.path.exists(cluster_data_path):
-            cluster_data = pd.read_csv(cluster_data_path)
-        
-        logger.info("Data loaded successfully")
-        
-    except Exception as e:
-        logger.error(f"Error loading data: {e}")
-        return
-    
-    # Initialize optimizer
-    optimizer = PortfolioOptimizer()
-    
-    # Test different optimization methods
-    methods = ['mean_variance', 'risk_parity', 'min_variance', 'max_sharpe']
-    if cluster_data is not None:
-        methods.append('cluster_based')
-    
-    results = {}
-    
-    for method in methods:
+def test_strategy(self, method: str, returns_data: pd.DataFrame):
+        """Test a single optimization strategy"""
         logger.info(f"Testing {method} optimization")
+        try:
+            # Pass the returns_data to the optimization method
+            optimization_result = self.optimize_portfolio(
+                price_data=self.price_data,
+                returns_data=returns_data,
+                method=method,
+                cluster_data=self.cluster_assignments_df
+            )
+            # ... existing code ...
+        except Exception as e:
+            logger.error(f"Error in {method} optimization: {e}", exc_info=True)
+
+    def run_all_tests(self):
+        """Run tests for all optimization strategies"""
+        # ... existing code ...
+        
+        # Load returns data once
+        returns_path = os.path.join(self.config.get_market_processed_dir(self.market), 'returns_data.csv')
+        if os.path.exists(returns_path):
+            returns_data = pd.read_csv(returns_path, index_col=0, header=[0, 1])
+            # Ensure the index is datetime
+            returns_data.index = pd.to_datetime(returns_data.index)
+        else:
+            logger.error(f"Returns data not found at {returns_path}. Cannot run tests.")
+            return
+
+        # Pass returns_data to each test
+        self.test_strategy('mean_variance', returns_data=returns_data)
+        self.test_strategy('risk_parity', returns_data=returns_data)
+        self.test_strategy('min_variance', returns_data=returns_data)
+        self.test_strategy('max_sharpe', returns_data=returns_data)
+        self.test_strategy('cluster_based', returns_data=returns_data)
+    
+    def main(market: str = 'US'):
+        """Main function to run portfolio optimization"""
+        logger.info(f"Starting portfolio optimization for {market} market")
+        config = Config()
         
         try:
-            result = optimizer.optimize_portfolio(
-                price_data=price_data,
-                method=method,
-                cluster_data=cluster_data
-            )
+            # Load data
+            processed_data_dir = config.get_market_data_dir(market, 'processed')
+            results_dir = config.get_market_results_dir(market)
+
+            processed_data_path = os.path.join(processed_data_dir, 'processed_stock_data.csv')
+            cluster_data_path = os.path.join(results_dir, 'cluster_assignments_kmeans.csv')
             
-            results[method] = result
+            price_data = pd.read_csv(processed_data_path, index_col=0, header=[0, 1])
+            price_data.index = pd.to_datetime(price_data.index)
             
-            # Print summary
-            weights = result['weights']
-            top_positions = weights.nlargest(5)
+            cluster_data = None
+            if os.path.exists(cluster_data_path):
+                cluster_data = pd.read_csv(cluster_data_path)
             
-            print(f"\n{method.upper()} OPTIMIZATION:")
-            print(f"Top 5 positions:")
-            for symbol, weight in top_positions.items():
-                print(f"  {symbol}: {weight:.3f}")
-            
-            if 'sharpe_ratio' in result:
-                print(f"Expected Return: {result['expected_return']:.3f}")
-                print(f"Volatility: {result['volatility']:.3f}")
-                print(f"Sharpe Ratio: {result['sharpe_ratio']:.3f}")
+            logger.info("Data loaded successfully")
             
         except Exception as e:
-            logger.error(f"Error in {method} optimization: {e}")
+            logger.error(f"Error loading data: {e}")
+            return
+        
+        # Initialize optimizer
+        optimizer = PortfolioOptimizer(market=market)
+        
+        # Test different optimization methods
+        methods = config.STRATEGIES
+    
+        results = {}
+        
+        # Load returns data once
+        returns_path = os.path.join(processed_data_dir, 'returns_data.csv')
+        if os.path.exists(returns_path):
+            returns_data = pd.read_csv(returns_path, index_col=0, header=[0, 1])
+            returns_data.index = pd.to_datetime(returns_data.index)
+        else:
+            logger.error(f"Returns data not found at {returns_path}. Cannot run optimization.")
+            return
+
+        for method in methods:
+            logger.info(f"Testing {method} optimization")
+            
+            try:
+                # Pass the returns_data to the optimization method
+                optimization_result = optimizer.optimize_portfolio(
+                    price_data=price_data,
+                    returns_data=returns_data,
+                    method=method,
+                    cluster_data=cluster_data
+                )
+                
+                results[method] = optimization_result
+                
+                # Print summary
+                weights = optimization_result.get('weights')
+                if weights is None or weights.empty:
+                    logger.warning(f"No weights produced for {method}. Skipping summary.")
+                    continue
+
+                top_positions = weights.nlargest(5)
+                
+                print(f"\n{method.upper()} OPTIMIZATION:")
+                print(f"Top 5 positions:")
+                for symbol, weight in top_positions.items():
+                    print(f"  {symbol}: {weight:.3f}")
+                
+                if 'sharpe_ratio' in optimization_result:
+                    expected_return = optimization_result.get('expected_return', 'N/A')
+                    volatility = optimization_result.get('volatility', 'N/A')
+                    sharpe_ratio = optimization_result.get('sharpe_ratio', 'N/A')
+
+                    # Check if the values are numeric before formatting
+                    if isinstance(expected_return, (int, float)):
+                        print(f"Expected Return: {expected_return:.3f}")
+                    if isinstance(volatility, (int, float)):
+                        print(f"Volatility: {volatility:.3f}")
+                    if isinstance(sharpe_ratio, (int, float)):
+                        print(f"Sharpe Ratio: {sharpe_ratio:.3f}")
+
+        except Exception as e:
+            logger.error(f"Error in {method} optimization: {e}", exc_info=True)
             continue
     
     # Save results
-    results_dir = Config.RESULTS_DIR
-    os.makedirs(results_dir, exist_ok=True)
-    
     for method, result in results.items():
-        # Save weights
-        weights_path = os.path.join(results_dir, f'portfolio_weights_{method}.csv')
-        result['weights'].to_csv(weights_path, header=['weight'])
-        
-        # Save full results (excluding non-serializable objects)
-        result_summary = {
-            'method': method,
-            'expected_return': result.get('expected_return', 0),
-            'volatility': result.get('volatility', 0),
-            'sharpe_ratio': result.get('sharpe_ratio', 0),
-            'optimization_status': result.get('optimization_status', 'unknown')
-        }
-        
-        import json
-        summary_path = os.path.join(results_dir, f'optimization_summary_{method}.json')
-        with open(summary_path, 'w') as f:
-            json.dump(result_summary, f, indent=2)
+        if 'weights' in result and not result['weights'].empty:
+            weights_df = result['weights'].to_frame(name='weight')
+            weights_df.to_csv(os.path.join(results_dir, f'portfolio_weights_{method}.csv'))
     
     logger.info("Portfolio optimization completed successfully!")
-
-if __name__ == "__main__":
-    main()

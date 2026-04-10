@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.cluster import KMeans, AgglomerativeClustering
 from sklearn.mixture import GaussianMixture
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import StandardScaler, RobustScaler
 from sklearn.metrics import silhouette_score, calinski_harabasz_score
 from sklearn.decomposition import PCA
 from scipy.cluster.hierarchy import dendrogram, linkage
@@ -19,6 +19,10 @@ import warnings
 warnings.filterwarnings('ignore')
 
 from config import Config
+from tslearn.clustering import TimeSeriesKMeans, silhouette_score as ts_silhouette_score
+from tslearn.utils import to_time_series_dataset
+import yfinance as yf
+from src.data.loader import DataLoader
 
 try:
     import hdbscan
@@ -35,55 +39,106 @@ from tqdm import tqdm
 from config import Config
 
 class FeatureEngineer:
-    """Creates features for stock clustering"""
+    """Creates features for clustering"""
     
-    def __init__(self):
+    def __init__(self, market: str):
         self.config = Config()
-    
+        self.market = market
+        self.results_dir = self.config.get_market_results_dir(market)
+        os.makedirs(self.results_dir, exist_ok=True)
+
     def create_clustering_features(self, 
                                  price_data: pd.DataFrame, 
-                                 returns_data: pd.DataFrame,
-                                 market_data: Optional[pd.DataFrame] = None) -> pd.DataFrame:
+                                 returns_data: pd.DataFrame, 
+                                 benchmark_data: pd.DataFrame) -> pd.DataFrame:
         """
-        Create comprehensive features for stock clustering
-        
-        Args:
-            price_data: Stock price data
-            returns_data: Stock returns data  
-            market_data: Market/benchmark data (optional)
-            
-        Returns:
-            DataFrame with clustering features for each stock
+        Create features for clustering analysis.
+        This version is more robust against missing data from yfinance.
         """
         logger.info("Creating clustering features")
         
-        symbols = price_data.columns.get_level_values(0).unique()
-        features_dict = {}
+        self.price_data = price_data
+        self.returns_data = returns_data.pct_change().dropna()
+        self.benchmark_returns = benchmark_data['Close'].pct_change().dropna()
         
-        for symbol in symbols:
+        symbols = self.price_data.columns.get_level_values(0).unique()
+        features = []
+        
+        for symbol in tqdm(symbols, desc="Creating clustering features"):
             try:
-                # Get symbol-specific data
-                symbol_prices = price_data[symbol]
-                symbol_returns = returns_data[symbol]['returns_1d'] if (symbol, 'returns_1d') in returns_data.columns else None
+                feature_dict = {}
+                # Basic return and volume stats (usually reliable)
+                symbol_returns = self.returns_data[(symbol, 'returns_1d')].dropna()
+                feature_dict = {
+                    'returns_mean': symbol_returns.mean(),
+                    'returns_std': symbol_returns.std(),
+                    'sharpe_ratio': (symbol_returns.mean() / symbol_returns.std()) * np.sqrt(252) if symbol_returns.std() != 0 else 0,
+                    'volume_mean': self.price_data[(symbol, 'Volume')].mean(),
+                }
+
+                # Cumulative returns for max drawdown calculation
+                cumulative_returns = (1 + symbol_returns).cumprod()
+                peak = cumulative_returns.expanding(min_periods=1).max()
+                drawdown = (cumulative_returns - peak) / peak
+                feature_dict['max_drawdown'] = drawdown.min()
+
+                # Correlation with benchmark
+                if self.benchmark_returns is not None:
+                    # Align indices before calculating correlation
+                    aligned_returns, aligned_benchmark = symbol_returns.align(self.benchmark_returns, join='inner')
+                    if not aligned_returns.empty:
+                        feature_dict['correlation_benchmark'] = aligned_returns.corr(aligned_benchmark)
+                    else:
+                        feature_dict['correlation_benchmark'] = 0.0
+                else:
+                    feature_dict['correlation_benchmark'] = 0.0
                 
-                if symbol_returns is None or len(symbol_returns.dropna()) < 50:
-                    logger.warning(f"Insufficient data for {symbol}, skipping")
-                    continue
-                
-                features = self._calculate_stock_features(symbol_prices, symbol_returns, market_data)
-                features_dict[symbol] = features
-                
+                # Advanced metrics from yfinance (handle missing data gracefully)
+                ticker = yf.Ticker(symbol)
+                info = ticker.info
+
+                feature_dict['market_cap'] = info.get('marketCap')
+                feature_dict['pe_ratio'] = info.get('trailingPE') or info.get('forwardPE')
+                feature_dict['beta'] = info.get('beta')
+
+                # Add a fallback for volatility ratio if beta is not available
+                if feature_dict['beta'] is not None and self.benchmark_returns is not None:
+                     feature_dict['volatility_ratio'] = symbol_returns.std() / self.benchmark_returns.std()
+                else:
+                     feature_dict['volatility_ratio'] = 1.0
+
+
+                features.append({'symbol': symbol, **feature_dict})
             except Exception as e:
-                logger.warning(f"Error calculating features for {symbol}: {e}")
+                logger.warning(f"Could not create all features for {symbol}: {e}")
+                # Append with whatever was successfully calculated
+                if 'symbol' not in feature_dict:
+                    feature_dict['symbol'] = symbol
+                features.append(feature_dict)
                 continue
         
-        # Convert to DataFrame
-        features_df = pd.DataFrame(features_dict).T
+        if not features:
+            logger.error("Feature creation failed for all stocks.")
+            return pd.DataFrame()
+
+        features_df = pd.DataFrame(features).set_index('symbol')
         
-        # Remove any stocks with missing features
-        features_df = features_df.dropna()
-        
+        # Select only the features that were successfully created for most stocks
+        # and are in the config, then fill NaNs
+        available_cols = list(set(features_df.columns) & set(self.config.CLUSTERING_FEATURES))
+        if not available_cols:
+            logger.error("None of the desired clustering features could be created.")
+            return pd.DataFrame()
+
+        features_df = features_df[available_cols]
+        features_df.fillna(features_df.median(), inplace=True) # Fill with median for robustness
+
         logger.info(f"Created features for {len(features_df)} stocks with {len(features_df.columns)} features")
+        
+        # Save features for inspection
+        features_path = os.path.join(self.results_dir, 'clustering_features.csv')
+        features_df.to_csv(features_path)
+        
         return features_df
     
     def _calculate_stock_features(self, 
@@ -179,6 +234,31 @@ class FeatureEngineer:
         except:
             return 0
 
+    def create_dtw_features(self, returns_data: pd.DataFrame) -> np.ndarray:
+        """
+        Prepare time series data for DTW clustering.
+        
+        Args:
+            returns_data: DataFrame of daily returns for all stocks.
+            
+        Returns:
+            A numpy array of shape (n_stocks, n_timesteps, 1)
+        """
+        logger.info("Preparing data for DTW clustering")
+        
+        # Pivot returns data to have symbols as rows and dates as columns
+        returns_pivot = returns_data.unstack(level=0)['returns_1d']
+        
+        # Fill NaNs - forward fill is a reasonable approach for time series
+        returns_pivot = returns_pivot.fillna(method='ffill').fillna(0)
+        
+        # Convert to tslearn format
+        time_series_dataset = to_time_series_dataset(returns_pivot.values)
+        
+        logger.info(f"Created DTW dataset with shape: {time_series_dataset.shape}")
+        return time_series_dataset, returns_pivot.index.tolist()
+
+
 class StockClusterer:
     """Main class for stock clustering"""
     
@@ -189,7 +269,14 @@ class StockClusterer:
         self.cluster_labels = {}
         self.features = None
         self.scaled_features = None
-    
+        self.dtw_features = None
+        self.dtw_symbols = None
+
+    def set_dtw_features(self, dtw_features: np.ndarray, dtw_symbols: List[str]):
+        """Set the pre-computed DTW features and corresponding symbols."""
+        self.dtw_features = dtw_features
+        self.dtw_symbols = dtw_symbols
+
     def fit_clustering_models(self, features: pd.DataFrame) -> Dict[str, Any]:
         """
         Fit multiple clustering algorithms to the features
@@ -207,7 +294,10 @@ class StockClusterer:
         
         results = {}
         
+        # --- Standard Feature-Based Clustering ---
         for algorithm, params in self.config.CLUSTERING_ALGORITHMS.items():
+            if algorithm == 'dtw': # Skip DTW in this loop
+                continue
             try:
                 logger.info(f"Fitting {algorithm} clustering")
                 
@@ -215,6 +305,10 @@ class StockClusterer:
                     model = KMeans(**params, random_state=42)
                     labels = model.fit_predict(self.scaled_features)
                     
+                elif algorithm == 'dbscan':
+                    model = DBSCAN(**params)
+                    labels = model.fit_predict(self.scaled_features)
+
                 elif algorithm == 'hierarchical':
                     model = AgglomerativeClustering(**params)
                     labels = model.fit_predict(self.scaled_features)
@@ -235,11 +329,11 @@ class StockClusterer:
                 self.cluster_labels[algorithm] = labels
                 
                 # Calculate metrics
-                n_clusters = len(np.unique(labels[labels != -1]))  # Exclude noise for HDBSCAN
+                n_clusters = len(np.unique(labels[labels != -1]))  # Exclude noise for DBSCAN/HDBSCAN
                 
                 if n_clusters > 1:
-                    silhouette = silhouette_score(self.scaled_features, labels) if len(np.unique(labels)) > 1 else -1
-                    calinski_harabasz = calinski_harabasz_score(self.scaled_features, labels) if len(np.unique(labels)) > 1 else 0
+                    silhouette = silhouette_score(self.scaled_features, labels)
+                    calinski_harabasz = calinski_harabasz_score(self.scaled_features, labels)
                 else:
                     silhouette = -1
                     calinski_harabasz = 0
@@ -250,7 +344,7 @@ class StockClusterer:
                     'n_clusters': n_clusters,
                     'silhouette_score': silhouette,
                     'calinski_harabasz_score': calinski_harabasz,
-                    'n_noise_points': np.sum(labels == -1) if algorithm == 'hdbscan' else 0
+                    'n_noise_points': np.sum(labels == -1)
                 }
                 
                 logger.info(f"{algorithm}: {n_clusters} clusters, silhouette={silhouette:.3f}")
@@ -258,7 +352,45 @@ class StockClusterer:
             except Exception as e:
                 logger.error(f"Error fitting {algorithm}: {e}")
                 continue
-        
+
+        # --- DTW Time Series Clustering ---
+        if 'dtw' in self.config.CLUSTERING_ALGORITHMS and self.dtw_features is not None:
+            algorithm = 'dtw'
+            params = self.config.CLUSTERING_ALGORITHMS[algorithm]
+            try:
+                logger.info(f"Fitting {algorithm} clustering using DTW")
+                
+                # DTW needs a different clustering model from tslearn
+                model = TimeSeriesKMeans(
+                    n_clusters=params.get('n_clusters', 5),
+                    metric="dtw",
+                    verbose=False,
+                    random_state=42,
+                    n_jobs=-1
+                )
+                labels = model.fit_predict(self.dtw_features)
+                
+                self.cluster_models[algorithm] = model
+                self.cluster_labels[algorithm] = labels
+                
+                n_clusters = len(np.unique(labels))
+                
+                # Silhouette score for time series is calculated differently
+                silhouette = ts_silhouette_score(self.dtw_features, labels, metric="dtw") if n_clusters > 1 else -1
+                
+                results[algorithm] = {
+                    'model': model,
+                    'labels': labels,
+                    'n_clusters': n_clusters,
+                    'silhouette_score': silhouette,
+                    'calinski_harabasz_score': -1, # Not applicable for DTW in this context
+                    'n_noise_points': 0
+                }
+                logger.info(f"{algorithm}: {n_clusters} clusters, silhouette={silhouette:.3f}")
+
+            except Exception as e:
+                logger.error(f"Error fitting {algorithm}: {e}")
+
         return results
     
     def get_cluster_assignments(self, algorithm: str = 'kmeans') -> pd.DataFrame:
@@ -274,8 +406,16 @@ class StockClusterer:
         if algorithm not in self.cluster_labels:
             raise ValueError(f"Algorithm {algorithm} not fitted yet")
         
+        # DTW uses a different set of symbols/ordering
+        if algorithm == 'dtw':
+            if self.dtw_symbols is None:
+                raise ValueError("DTW symbols not set. Run feature engineering first.")
+            symbols = self.dtw_symbols
+        else:
+            symbols = self.features.index
+
         assignments = pd.DataFrame({
-            'symbol': self.features.index,
+            'symbol': symbols,
             'cluster': self.cluster_labels[algorithm]
         })
         
@@ -295,26 +435,38 @@ class StockClusterer:
             raise ValueError(f"Algorithm {algorithm} not fitted yet")
         
         labels = self.cluster_labels[algorithm]
+        
+        # Determine which feature set and symbols to use
+        if algorithm == 'dtw':
+            if self.dtw_symbols is None:
+                raise ValueError("DTW symbols not set.")
+            # For DTW, analysis is based on the original features, not the time series itself
+            feature_df = self.features.loc[self.dtw_symbols]
+            symbols = self.dtw_symbols
+        else:
+            feature_df = self.features
+            symbols = self.features.index
+
         cluster_stats = []
         
         unique_clusters = np.unique(labels)
         
         for cluster_id in unique_clusters:
-            if cluster_id == -1:  # Skip noise cluster in HDBSCAN
+            if cluster_id == -1:  # Skip noise cluster
                 continue
             
             cluster_mask = labels == cluster_id
-            cluster_features = self.features[cluster_mask]
-            cluster_symbols = self.features.index[cluster_mask].tolist()
+            cluster_features = feature_df[cluster_mask]
+            cluster_symbols = np.array(symbols)[cluster_mask].tolist()
             
             stats = {
                 'cluster_id': cluster_id,
                 'n_stocks': len(cluster_symbols),
                 'stocks': cluster_symbols,
-                'mean_return': cluster_features['returns_mean'].mean() if 'returns_mean' in cluster_features.columns else 0,
-                'mean_volatility': cluster_features['returns_std'].mean() if 'returns_std' in cluster_features.columns else 0,
-                'mean_sharpe': cluster_features['sharpe_ratio'].mean() if 'sharpe_ratio' in cluster_features.columns else 0,
-                'mean_market_corr': cluster_features['market_correlation'].mean() if 'market_correlation' in cluster_features.columns else 0
+                'mean_return': cluster_features['returns_mean'].mean(),
+                'mean_volatility': cluster_features['returns_std'].mean(),
+                'mean_sharpe': cluster_features['sharpe_ratio'].mean(),
+                'mean_market_corr': cluster_features.get('market_correlation', pd.Series(0)).mean()
             }
             
             cluster_stats.append(stats)
@@ -338,11 +490,40 @@ class StockClusterer:
         
         labels = self.cluster_labels[algorithm]
         
-        if plot_type == 'pca':
+        # DTW visualization is different
+        if algorithm == 'dtw':
+            self._plot_dtw_clusters(labels, algorithm, save_plots)
+        elif plot_type == 'pca':
             self._plot_pca_clusters(labels, algorithm, save_plots)
         elif plot_type == 'features':
             self._plot_feature_clusters(labels, algorithm, save_plots)
-    
+
+    def _plot_dtw_clusters(self, labels: np.ndarray, algorithm: str, save_plots: bool):
+        """Plot the centroids of DTW clusters."""
+        logger.info(f"Visualizing DTW cluster centroids for '{algorithm}'")
+        
+        model = self.cluster_models.get(algorithm)
+        if not hasattr(model, 'cluster_centers_'):
+            logger.warning("DTW model does not have cluster centers to plot.")
+            return
+
+        plt.figure(figsize=(12, 8))
+        for i, center in enumerate(model.cluster_centers_):
+            plt.plot(center.ravel(), label=f"Cluster {i}")
+        
+        plt.title(f"DTW Cluster Centroids - {algorithm.title()}")
+        plt.xlabel("Time Step")
+        plt.ylabel("Normalized Return")
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
+
+        if save_plots:
+            os.makedirs(self.config.RESULTS_DIR, exist_ok=True)
+            plt.savefig(os.path.join(self.config.RESULTS_DIR, f'clusters_dtw_{algorithm}.png'), 
+                       dpi=300, bbox_inches='tight')
+        plt.show()
+
     def _plot_pca_clusters(self, labels: np.ndarray, algorithm: str, save_plots: bool):
         """Plot clusters in PCA space"""
         # Apply PCA for visualization
@@ -373,260 +554,29 @@ class StockClusterer:
                        dpi=300, bbox_inches='tight')
         
         plt.show()
-    
-    def _plot_feature_clusters(self, labels: np.ndarray, algorithm: str, save_plots: bool):
-        """Plot cluster characteristics using key features"""
-        n_clusters = len(np.unique(labels[labels != -1]))
-        
-        fig, axes = plt.subplots(2, 2, figsize=(15, 12))
-        
-        # Feature pairs to plot
-        feature_pairs = [
-            ('returns_mean', 'returns_std'),
-            ('sharpe_ratio', 'max_drawdown'),
-            ('market_correlation', 'beta'),
-            ('price_momentum_1m', 'price_volatility')
-        ]
-        
-        for idx, (feat1, feat2) in enumerate(feature_pairs):
-            row, col = idx // 2, idx % 2
-            ax = axes[row, col]
-            
-            if feat1 in self.features.columns and feat2 in self.features.columns:
-                scatter = ax.scatter(self.features[feat1], self.features[feat2], 
-                                   c=labels, cmap='tab10', alpha=0.7, s=50)
-                ax.set_xlabel(feat1.replace('_', ' ').title())
-                ax.set_ylabel(feat2.replace('_', ' ').title())
-                ax.grid(True, alpha=0.3)
-                
-                if idx == 0:  # Add colorbar only once
-                    plt.colorbar(scatter, ax=ax, label='Cluster')
-        
-        plt.suptitle(f'Stock Clusters - {algorithm.title()} (Feature Space)', fontsize=16)
-        plt.tight_layout()
-        
-        if save_plots:
-            os.makedirs(self.config.RESULTS_DIR, exist_ok=True)
-            plt.savefig(os.path.join(self.config.RESULTS_DIR, f'clusters_features_{algorithm}.png'), 
-                       dpi=300, bbox_inches='tight')
-        
-        plt.show()
 
-def main():
-    """Main function to run stock clustering analysis"""
-    logger.info("Starting stock clustering analysis")
+def main(market: str = 'US'):
+    """Main function for clustering analysis"""
+    logger.info(f"Starting stock clustering analysis for {market} market")
     
-    # Load processed data
-    try:
-        # Use original processed data file
-        processed_data_path = os.path.join(Config.PROCESSED_DATA_DIR, 'processed_stock_data.csv')
-        if not os.path.exists(processed_data_path):
-            logger.error("Processed data not found. Please run data collection first.")
-            return
-        
-        logger.info(f"Loading data from: {processed_data_path}")
-        
-        # Read the original CSV data
-        df = pd.read_csv(processed_data_path)
-        
-        # Extract ticker symbols from column names (skip 'Ticker' column)
-        ticker_symbols = set()
-        for col in df.columns[1:]:  # Skip first column 'Ticker'
-            # Extract base symbol (remove .1, .2, etc. suffixes)
-            if '.' in col:
-                base_symbol = col.split('.')[0]
-            else:
-                base_symbol = col
-            ticker_symbols.add(base_symbol)
-        
-        ticker_symbols = sorted(list(ticker_symbols))
-        logger.info(f"Found {len(ticker_symbols)} unique symbols: {ticker_symbols}")
-        
-        # Create date index (skip the header rows that contain price type info)
-        # First find where actual data starts (should be rows with valid dates)
-        date_col = df.iloc[:, 0]
-        
-        # Find the first row that contains a valid date
-        first_valid_idx = None
-        for i in range(len(date_col)):
-            try:
-                parsed_date = pd.to_datetime(date_col.iloc[i], errors='raise')
-                if pd.notna(parsed_date):
-                    first_valid_idx = i
-                    break
-            except:
-                continue
-        
-        if first_valid_idx is None:
-            logger.error("Could not find any valid dates in the data")
-            return
-            
-        dates = pd.to_datetime(df.iloc[first_valid_idx:, 0])
-        logger.info(f"Data starts at row {first_valid_idx}, found {len(dates)} dates")
-        
-        # Get price types from first row data (this tells us what each column represents)
-        price_types = ['Open', 'High', 'Low', 'Close', 'Adj Close', 'Volume']
-        
-        # Extract price data for each symbol
-        multi_columns = []
-        valid_columns = []
-        
-        for symbol in ticker_symbols:
-            # Find all columns for this symbol
-            symbol_cols = []
-            symbol_col_indices = []
-            
-            for i, col in enumerate(df.columns[1:], 1):  # Start from 1 to skip 'Ticker'
-                if col == symbol or col.startswith(f"{symbol}."):
-                    symbol_cols.append(col)
-                    symbol_col_indices.append(i)
-            
-            if len(symbol_cols) > 0:
-                # Get the data for these columns (from first valid data row onwards)
-                symbol_data = df.iloc[first_valid_idx:, symbol_col_indices]
-                
-                # Convert to numeric
-                for col_idx, col_name in enumerate(symbol_cols):
-                    col_data = pd.to_numeric(symbol_data.iloc[:, col_idx], errors='coerce')
-                    
-                    # Only include columns with sufficient valid data
-                    if col_data.notna().sum() > 10:
-                        # Assign appropriate price type
-                        if col_idx < len(price_types):
-                            price_type = price_types[col_idx]
-                        else:
-                            price_type = f"Price_{col_idx}"
-                        
-                        multi_columns.append((symbol, price_type))
-                        valid_columns.append(col_data.values)
-                        logger.debug(f"Added column for {symbol} - {price_type} with {col_data.notna().sum()} valid values")
-        
-        # Create the final MultiIndex DataFrame
-        if valid_columns:
-            multi_index = pd.MultiIndex.from_tuples(multi_columns, names=['Ticker', 'Price'])
-            price_data = pd.DataFrame(
-                np.column_stack(valid_columns),
-                index=dates.values,
-                columns=multi_index
-            )
-            
-            # Convert to float
-            price_data = price_data.astype(float)
-            
-            logger.info(f"Created price data with shape: {price_data.shape}")
-            logger.info(f"Successfully loaded {len(price_data.columns.get_level_values(0).unique())} unique symbols")
-        else:
-            logger.error("No valid price data found")
-            return
-        
-        # Calculate returns directly from price data
-        symbols = price_data.columns.get_level_values(0).unique()
-        returns_dict = {}
-        
-        logger.info(f"Calculating returns for {len(symbols)} symbols")
-        logger.info(f"Available symbols: {symbols.tolist()}")
-        logger.info(f"Sample columns: {price_data.columns[:10].tolist()}")
-        
-        for symbol in symbols:
-            try:
-                logger.debug(f"Processing returns for symbol: {symbol}")
-                
-                # Check what columns exist for this symbol
-                symbol_columns = [col for col in price_data.columns if col[0] == symbol]
-                logger.debug(f"Columns for {symbol}: {symbol_columns}")
-                
-                if (symbol, 'Close') in price_data.columns:
-                    close_prices = price_data[symbol]['Close'].dropna()
-                    
-                    if len(close_prices) < 10:  # Need minimum data
-                        logger.warning(f"Insufficient price data for {symbol}: {len(close_prices)} values")
-                        continue
-                    
-                    # Calculate various return types
-                    returns_1d = close_prices.pct_change()
-                    log_returns_1d = np.log(close_prices / close_prices.shift(1))
-                    returns_5d = close_prices.pct_change(periods=5)
-                    returns_20d = close_prices.pct_change(periods=20)
-                    
-                    returns_dict[symbol] = pd.DataFrame({
-                        'returns_1d': returns_1d,
-                        'log_returns_1d': log_returns_1d,
-                        'returns_5d': returns_5d,
-                        'returns_20d': returns_20d
-                    })
-                    
-                    logger.info(f"Calculated returns for {symbol}")
-                    
-                else:
-                    logger.warning(f"No Close price column found for {symbol}")
-                    
-            except Exception as e:
-                logger.warning(f"Error calculating returns for {symbol}: {e}")
-                continue
-        
-        logger.info(f"Successfully calculated returns for {len(returns_dict)} symbols")
-        
-        # Combine returns into MultiIndex DataFrame
-        if returns_dict:
-            returns_data = pd.concat(returns_dict, axis=1)
-        else:
-            logger.warning("No returns data calculated, creating empty DataFrame")
-            returns_data = pd.DataFrame()
-        
-        # Load benchmark data
-        benchmark_path = os.path.join(Config.RAW_DATA_DIR, f'{Config.BENCHMARK_SYMBOL}_benchmark.csv')
-        market_data = None
-        if os.path.exists(benchmark_path):
-            try:
-                benchmark_df = pd.read_csv(benchmark_path)
-                
-                # Find where actual data starts in benchmark file (same structure as main file)
-                benchmark_date_col = benchmark_df.iloc[:, 0]
-                benchmark_first_valid_idx = None
-                
-                for i in range(len(benchmark_date_col)):
-                    try:
-                        parsed_date = pd.to_datetime(benchmark_date_col.iloc[i], errors='raise')
-                        if pd.notna(parsed_date):
-                            benchmark_first_valid_idx = i
-                            break
-                    except:
-                        continue
-                
-                if benchmark_first_valid_idx is not None:
-                    # Extract actual data rows
-                    benchmark_dates = pd.to_datetime(benchmark_df.iloc[benchmark_first_valid_idx:, 0])
-                    benchmark_prices = benchmark_df.iloc[benchmark_first_valid_idx:, 1:]
-                    
-                    # Convert to numeric
-                    for col in benchmark_prices.columns:
-                        benchmark_prices[col] = pd.to_numeric(benchmark_prices[col], errors='coerce')
-                    
-                    market_data = benchmark_prices.copy()
-                    market_data.index = benchmark_dates.values
-                    
-                    # Rename columns to standard names if needed
-                    if 'Close' not in market_data.columns and len(market_data.columns) > 0:
-                        market_data['Close'] = market_data.iloc[:, 0]  # Use first column as Close
-                    
-                    logger.info(f"Loaded benchmark data with shape: {market_data.shape}")
-                else:
-                    logger.warning("Could not find valid dates in benchmark data")
-                    
-            except Exception as e:
-                logger.warning(f"Error loading benchmark data: {e}")
-                market_data = None
-        
-        logger.info("Data loaded successfully")
-        
-    except Exception as e:
-        logger.error(f"Error loading data: {e}")
+    config = Config()
+    
+    # Load data
+    data_loader = DataLoader(market=market)
+    price_data, returns_data, benchmark_data = data_loader.load_all_data()
+    
+    if price_data.empty:
+        logger.error("Price data is empty, cannot proceed with clustering.")
         return
-    
+        
     # Create features
-    feature_engineer = FeatureEngineer()
-    features = feature_engineer.create_clustering_features(price_data, returns_data, market_data)
+    feature_engineer = FeatureEngineer(market=market)
+    features = feature_engineer.create_clustering_features(price_data, returns_data, benchmark_data)
     
+    if features.empty:
+        logger.error("Feature creation failed. Aborting clustering.")
+        return
+        
     # Perform clustering
     clusterer = StockClusterer()
     results = clusterer.fit_clustering_models(features)

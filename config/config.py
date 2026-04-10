@@ -91,42 +91,27 @@ class Config:
     
     DL_MODELS = {
         'lstm': {
-            'sequence_length': 60,
             'hidden_size': 50,
-            'num_layers': 2,
             'dropout': 0.2,
-            'epochs': 100,
-            'batch_size': 32
+            'fit_params': {
+                'epochs': 50,
+                'batch_size': 32,
+                'verbose': 0
+            }
         },
-        'gru': {
-            'sequence_length': 60,
-            'hidden_size': 50,
-            'num_layers': 2,
-            'dropout': 0.2,
-            'epochs': 100,
-            'batch_size': 32
-        },
-        'transformer': {
-            'sequence_length': 60,
-            'd_model': 64,
-            'nhead': 8,
-            'num_layers': 3,
-            'dropout': 0.1,
-            'epochs': 100,
-            'batch_size': 32
+        'cnn': {
+            'dropout': 0.3,
+            'learning_rate': 0.001,
+            'fit_params': {
+                'epochs': 50,
+                'batch_size': 32,
+                'verbose': 0
+            }
         }
     }
     
-    # Portfolio optimization settings
-    OPTIMIZATION_METHODS = [
-        'mean_variance',      # Modern Portfolio Theory
-        'risk_parity',        # Risk Parity
-        'hierarchical_risk_parity',  # HRP
-        'black_litterman',    # Black-Litterman
-        'robust_optimization' # Robust optimization
-    ]
-    
-    # Risk constraints
+    # Optimization settings
+    STRATEGIES = ['mean_variance', 'risk_parity', 'min_variance', 'max_sharpe', 'cluster_based']
     MAX_WEIGHT_PER_STOCK = 0.25  # Maximum 25% allocation per stock
     MAX_WEIGHT_PER_SECTOR = 0.3  # Maximum 30% allocation per sector
     MIN_WEIGHT = 0.0  # Minimum weight (allows short selling if negative)
@@ -185,6 +170,14 @@ class Config:
         results_dir = os.path.join(Config.RESULTS_DIR, market.lower())
         os.makedirs(results_dir, exist_ok=True)
         return results_dir
+
+    @staticmethod
+    def get_market_models_dir(market: str) -> str:
+        """Get market-specific models directory"""
+        market = market.upper()
+        models_dir = os.path.join(Config.BASE_DIR, 'models', market.lower())
+        os.makedirs(models_dir, exist_ok=True)
+        return models_dir
 
 class ModelConfig:
     """Configuration for specific model parameters"""

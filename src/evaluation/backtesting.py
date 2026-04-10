@@ -118,12 +118,14 @@ class PerformanceMetrics:
 class PortfolioBacktester:
     """Main backtesting engine"""
     
-    def __init__(self):
+    def __init__(self, market: str = 'US'):
         self.config = Config()
         self.results = {}
+        self.market = market
     
     def run_backtest(self,
                     price_data: pd.DataFrame,
+                    returns_data: pd.DataFrame,
                     optimization_method: str,
                     rebalancing_freq: str = 'monthly',
                     start_date: Optional[str] = None,
@@ -152,8 +154,10 @@ class PortfolioBacktester:
         # Prepare data
         if start_date:
             price_data = price_data[price_data.index >= start_date]
+            returns_data = returns_data[returns_data.index >= start_date]
         if end_date:
             price_data = price_data[price_data.index <= end_date]
+            returns_data = returns_data[returns_data.index <= end_date]
         
         # Get rebalancing dates
         rebalancing_dates = self._get_rebalancing_dates(price_data.index, rebalancing_freq)
@@ -168,20 +172,22 @@ class PortfolioBacktester:
         current_weights = None
         
         from src.optimization import PortfolioOptimizer
-        optimizer = PortfolioOptimizer()
+        optimizer = PortfolioOptimizer(market=self.market)
         
         # Run backtest
         for i, rebal_date in enumerate(rebalancing_dates[:-1]):
             try:
                 # Get data up to rebalancing date
                 historical_data = price_data[price_data.index <= rebal_date]
+                historical_returns = returns_data[returns_data.index <= rebal_date]
                 
                 if len(historical_data) < 100:  # Need sufficient history
                     continue
                 
                 # Optimize portfolio
                 optimization_result = optimizer.optimize_portfolio(
-                    historical_data,
+                    price_data=historical_data,
+                    returns_data=historical_returns,
                     method=optimization_method,
                     **optimization_kwargs
                 )
@@ -359,18 +365,24 @@ class PortfolioBacktester:
         return metrics
     
     def compare_strategies(self,
-                          price_data: pd.DataFrame,
-                          strategies: List[str],
-                          benchmark_symbol: str = 'SPY',
-                          **backtest_kwargs) -> Dict[str, Any]:
+                           strategies: List[str],
+                           price_data: pd.DataFrame,
+                           returns_data: pd.DataFrame,
+                           benchmark_returns: Optional[pd.Series] = None,
+                           initial_capital: float = 100000.0,
+                           rebalance_frequency: str = 'M',
+                           transaction_cost: float = 0.001) -> pd.DataFrame:
         """
         Compare multiple portfolio strategies
         
         Args:
-            price_data: Historical price data
             strategies: List of optimization methods to compare
-            benchmark_symbol: Benchmark symbol for comparison
-            **backtest_kwargs: Arguments for backtesting
+            price_data: Historical price data
+            returns_data: Historical returns data
+            benchmark_returns: Benchmark symbol for comparison
+            initial_capital: Starting capital
+            rebalance_frequency: Rebalancing frequency
+            transaction_cost: Transaction cost as fraction of trade value
             
         Returns:
             Comparison results
@@ -378,69 +390,70 @@ class PortfolioBacktester:
         logger.info(f"Comparing {len(strategies)} strategies")
         
         results = {}
-        
-        # Run backtest for each strategy
         for strategy in strategies:
+            logger.info(f"Backtesting {strategy}")
             try:
-                logger.info(f"Backtesting {strategy}")
-                result = self.run_backtest(
+                backtest_result = self.run_backtest(
+                    strategy=strategy,
                     price_data=price_data,
-                    optimization_method=strategy,
-                    **backtest_kwargs
+                    returns_data=returns_data,
+                    benchmark_returns=benchmark_returns,
+                    initial_capital=initial_capital,
+                    rebalance_frequency=rebalance_frequency,
+                    transaction_cost=transaction_cost
                 )
-                results[strategy] = result
+                if not backtest_result:
+                    logger.warning(f"Backtest for {strategy} did not produce results. Skipping.")
+                    return None
+
+                # Calculate performance metrics
+                metrics = self.calculate_performance_metrics(
+                    portfolio_values=backtest_result['portfolio_values'],
+                    benchmark_returns=benchmark_returns
+                )
+                backtest_result['performance_metrics'] = metrics
+                
+                # Save results
+                self.save_backtest_results(strategy, backtest_result)
+                
+                return backtest_result
             except Exception as e:
                 logger.error(f"Error backtesting {strategy}: {e}")
                 continue
         
-        # Add benchmark
-        if (benchmark_symbol, 'Close') in price_data.columns:
-            benchmark_prices = price_data[benchmark_symbol]['Close']
-            benchmark_returns = benchmark_prices.pct_change().dropna()
-            
-            # Align with strategy returns
-            common_dates = None
-            for strategy_result in results.values():
-                if common_dates is None:
-                    common_dates = strategy_result['portfolio_returns'].index
-                else:
-                    common_dates = common_dates.intersection(strategy_result['portfolio_returns'].index)
-            
-            if common_dates is not None and len(common_dates) > 0:
-                aligned_benchmark = benchmark_returns.reindex(common_dates, method='ffill').dropna()
-                
-                results['benchmark'] = {
-                    'portfolio_returns': aligned_benchmark,
-                    'performance_metrics': self._calculate_performance_metrics(aligned_benchmark),
-                    'optimization_method': benchmark_symbol
-                }
-        
         # Create comparison summary
         comparison_metrics = self._create_comparison_summary(results)
         
-        return {
-            'individual_results': results,
-            'comparison_metrics': comparison_metrics
-        }
-    
-    def _create_comparison_summary(self, results: Dict[str, Any]) -> pd.DataFrame:
+        # Save comparison summary
+        summary_path = os.path.join(self.results_dir, 'strategy_comparison_summary.csv')
+        comparison_metrics.to_csv(summary_path)
+        logger.info(f"Saved strategy comparison summary to {summary_path}")
+        
+        return comparison_metrics
+
+    def _create_comparison_summary(self, results: Dict[str, Dict[str, Any]]) -> pd.DataFrame:
         """Create summary comparison of strategies"""
         summary_data = []
+        for strategy, result in results.items():
+            # Ensure result is not None and contains performance_metrics
+            if result and 'performance_metrics' in result:
+                metrics = result.get('performance_metrics', {})
+                summary_data.append({
+                    'Strategy': strategy,
+                    'Annualized Return': metrics.get('annualized_return', 0),
+                    'Volatility': metrics.get('volatility', 0),
+                    'Sharpe Ratio': metrics.get('sharpe_ratio', 0),
+                    'Sortino Ratio': metrics.get('sortino_ratio', 0),
+                    'Max Drawdown': metrics.get('max_drawdown', 0),
+                    'Calmar Ratio': metrics.get('calmar_ratio', 0)
+                })
+            else:
+                logger.warning(f"No performance metrics found for strategy '{strategy}'. It will be excluded from the summary.")
         
-        for strategy_name, result in results.items():
-            metrics = result['performance_metrics']
-            
-            summary_data.append({
-                'Strategy': strategy_name,
-                'Total Return': metrics.get('total_return', 0),
-                'Annual Return': metrics.get('annualized_return', 0),
-                'Volatility': metrics.get('volatility', 0),
-                'Sharpe Ratio': metrics.get('sharpe_ratio', 0),
-                'Sortino Ratio': metrics.get('sortino_ratio', 0),
-                'Max Drawdown': metrics.get('max_drawdown', 0),
-                'Calmar Ratio': metrics.get('calmar_ratio', 0)
-            })
-        
+        if not summary_data:
+            logger.error("No data to create comparison summary. All strategies might have failed.")
+            return pd.DataFrame()
+
         return pd.DataFrame(summary_data).set_index('Strategy')
 
 class VisualizationTools:
@@ -540,90 +553,57 @@ class VisualizationTools:
         
         plt.show()
 
-def main():
-    """Main function to run comprehensive backtesting"""
-    logger.info("Starting comprehensive portfolio backtesting")
+def main(market: str = 'US'):
+    """Main function for backtesting"""
+    logger.info(f"Starting comprehensive portfolio backtesting for {market} market")
     
-    try:
-        # Load data
-        processed_data_path = os.path.join(Config.PROCESSED_DATA_DIR, 'processed_stock_data.csv')
-        
-        price_data = pd.read_csv(processed_data_path, index_col=0, header=[0, 1])
-        price_data.index = pd.to_datetime(price_data.index)
-        
-        logger.info("Data loaded successfully")
-        
-    except Exception as e:
-        logger.error(f"Error loading data: {e}")
+    config = Config()
+    backtester = PortfolioBacktester(market=market)
+    
+    # Load data
+    price_data, returns_data, benchmark_returns = backtester.load_data()
+    
+    if price_data.empty:
+        logger.error("Price data is empty, cannot proceed with backtesting.")
         return
-    
-    # Initialize backtester
-    backtester = PortfolioBacktester()
-    
-    # Define strategies to test
-    strategies = [
-        'mean_variance',
-        'risk_parity', 
-        'min_variance',
-        'max_sharpe'
-    ]
-    
-    # Check if cluster data exists
-    cluster_data_path = os.path.join(Config.RESULTS_DIR, 'cluster_assignments_kmeans.csv')
-    if os.path.exists(cluster_data_path):
-        strategies.append('cluster_based')
-    
-    # Run comparison
-    logger.info(f"Comparing strategies: {strategies}")
-    
-    comparison_results = backtester.compare_strategies(
-        price_data=price_data,
-        strategies=strategies,
-        rebalancing_freq='monthly',
-        start_date='2020-01-01',  # Use recent data for faster testing
-        transaction_cost=0.001
-    )
-    
-    # Display results
-    print("\nSTRATEGY COMPARISON RESULTS:")
-    print("=" * 80)
-    print(comparison_results['comparison_metrics'].round(4))
-    
-    # Create visualizations
-    results_dir = Config.RESULTS_DIR
-    os.makedirs(results_dir, exist_ok=True)
-    
-    # Plot performance comparison
-    VisualizationTools.plot_performance_comparison(
-        comparison_results,
-        save_path=os.path.join(results_dir, 'strategy_comparison.png')
-    )
-    
-    # Save detailed results
-    for strategy_name, result in comparison_results['individual_results'].items():
-        # Save portfolio values
-        portfolio_values_path = os.path.join(results_dir, f'portfolio_values_{strategy_name}.csv')
-        result['portfolio_returns'].to_csv(portfolio_values_path)
-        
-        # Save performance metrics
-        metrics_path = os.path.join(results_dir, f'performance_metrics_{strategy_name}.json')
-        import json
-        with open(metrics_path, 'w') as f:
-            json.dump(result['performance_metrics'], f, indent=2)
-    
-    # Save comparison summary
-    summary_path = os.path.join(results_dir, 'strategy_comparison_summary.csv')
-    comparison_results['comparison_metrics'].to_csv(summary_path)
-    
-    # Final summary
-    best_sharpe = comparison_results['comparison_metrics']['Sharpe Ratio'].idxmax()
-    best_return = comparison_results['comparison_metrics']['Annual Return'].idxmax()
-    
-    print(f"\nBEST PERFORMING STRATEGIES:")
-    print(f"Highest Sharpe Ratio: {best_sharpe} ({comparison_results['comparison_metrics'].loc[best_sharpe, 'Sharpe Ratio']:.3f})")
-    print(f"Highest Annual Return: {best_return} ({comparison_results['comparison_metrics'].loc[best_return, 'Annual Return']:.3f})")
-    
-    logger.info("Backtesting completed successfully!")
 
-if __name__ == "__main__":
-    main()
+    # Define strategies to compare
+    strategies = config.STRATEGIES
+
+    # Compare strategies
+    comparison_results = backtester.compare_strategies(
+        strategies=strategies,
+        price_data=price_data,
+        returns_data=returns_data,
+        benchmark_returns=benchmark_returns,
+        initial_capital=config.INITIAL_CAPITAL,
+        rebalance_frequency=config.REBALANCE_FREQUENCY,
+        transaction_cost=config.TRANSACTION_COST
+    )
+    
+    if comparison_results is not None and not comparison_results.empty:
+        logger.info("\n" + comparison_results.to_string())
+        
+        # Visualize results
+        visualizer = VisualizationTools(market=market)
+        all_portfolio_values = {}
+        for strategy in strategies:
+            try:
+                values_path = os.path.join(backtester.results_dir, f'portfolio_values_{strategy}.csv')
+                if os.path.exists(values_path):
+                    all_portfolio_values[strategy] = pd.read_csv(values_path, index_col=0, parse_dates=True)['value']
+            except Exception as e:
+                logger.warning(f"Could not load portfolio values for {strategy}: {e}")
+
+        if all_portfolio_values:
+            benchmark_path = os.path.join(backtester.results_dir, 'benchmark_values.csv')
+            benchmark_values = pd.read_csv(benchmark_path, index_col=0, parse_dates=True)['value'] if os.path.exists(benchmark_path) else None
+            
+            visualizer.plot_all_strategy_performances(all_portfolio_values, benchmark_values)
+            visualizer.plot_performance_summary(comparison_results)
+    else:
+        logger.error("Backtesting produced no results to display.")
+
+if __name__ == '__main__':
+    # Example of running for a specific market
+    main(market='US')

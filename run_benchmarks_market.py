@@ -210,6 +210,19 @@ def main():
     idx_bm = load_index_benchmark(market)
     print(f"  → {len(idx_bm)} index benchmarks")
 
+    if ml:
+        # Get start and end from the first ML strategy (they should all be the same)
+        first_ml_key = list(ml.keys())[0]
+        ml_start = ml[first_ml_key].index.min()
+        ml_end = ml[first_ml_key].index.max()
+        print(f"\n[*] Aligning all benchmarks to ML date range: {ml_start.date()} → {ml_end.date()}")
+        
+        for k in list(port_bm.keys()):
+            port_bm[k] = port_bm[k].loc[ml_start:ml_end]
+            
+        for k in list(idx_bm.keys()):
+            idx_bm[k] = idx_bm[k].loc[ml_start:ml_end]
+
     all_strats = {**ml, **port_bm, **idx_bm}
     print(f"\n[4] Total strategies: {len(all_strats)}")
 

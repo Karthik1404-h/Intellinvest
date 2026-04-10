@@ -41,13 +41,18 @@ def regenerate_strategies(market: str = 'US'):
     try:
         price_data = pd.read_csv(processed_data_path, index_col=0, header=[0, 1])
         price_data.index = pd.to_datetime(price_data.index)
+        
+        returns_data_path = os.path.join(processed_data_dir, 'returns_data.csv')
+        returns_data = pd.read_csv(returns_data_path, index_col=0, header=[0, 1])
+        returns_data.index = pd.to_datetime(returns_data.index)
+        
         logger.info(f"Loaded data shape: {price_data.shape}")
     except Exception as e:
         logger.error(f"Error loading data: {e}")
         return False
     
     # Initialize backtester
-    backtester = PortfolioBacktester()
+    backtester = PortfolioBacktester(market=market)
     
     # Strategies to regenerate
     strategies = ['mean_variance', 'max_sharpe', 'min_variance', 'cluster_based', 'risk_parity']
@@ -65,7 +70,8 @@ def regenerate_strategies(market: str = 'US'):
         try:
             # Run backtest
             result = backtester.run_backtest(
-                price_data, 
+                price_data=price_data, 
+                returns_data=returns_data,
                 optimization_method=strategy,
                 start_date='2020-01-01',
                 rebalancing_freq='monthly'
